@@ -2,10 +2,13 @@ FROM golang:1.25-alpine
 
 WORKDIR /app
 
+ENV GOTOOLCHAIN=local
+
 COPY . .
 
-RUN go mod download && go build -o /app/bin/server ./cmd/server
+# go mod tidy completes go.sum for modernc.org/sqlite and jackc/pgx/v5.
+RUN go mod tidy && go mod download && go build -o /app/bin/petclinic ./cmd/petclinic
 
-EXPOSE 8080
+EXPOSE 9966
 
-CMD ["sh", "-c", "/app/bin/server"]
+CMD ["/app/bin/petclinic"]
