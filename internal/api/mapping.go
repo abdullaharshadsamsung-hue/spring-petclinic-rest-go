@@ -2,33 +2,40 @@ package api
 
 // This file is the Go port of the MapStruct UserMapper interface
 // (org.springframework.samples.petclinic.mapper.UserMapper). MapStruct
-// generated UserMapperImpl at compile time; here the mappers are plain,
+// generated UserMapperImpl at compile time. Here the mappers are plain,
 // hand-written functions.
 //
 // MIGRATION_NOTE: The vet mappers (VetToDTO, VetsToDTOs, VetFromDTO,
 // VetFromFieldsDTO, VetDTO, VetFieldsDTO) also live in internal/api/mapping.go.
-// If this output replaces that file instead of being merged into it, those
-// declarations must be carried over (or moved to vet_mapping.go). Otherwise
+// If this output replaces that file instead of being merged into it, carry
+// those declarations over (or move them to vet_mapping.go). Otherwise
 // mapping_test.go and the vet handlers will no longer compile.
 //
 // MIGRATION_NOTE: MapStruct's null semantics are kept on purpose:
 //   - A nil input object maps to nil.
-//   - A nil collection maps to a nil slice, which encodes as JSON null, the
-//     same as Jackson's default output for a null field.
+//   - A nil collection maps to a nil slice, which encodes as JSON null. This
+//     matches Jackson's default output for a null field.
 //   - A nil element inside a collection maps to a nil element, so the output
 //     length always equals the input length.
 //
-// MIGRATION_NOTE: @Mapping(target = "id", ignore = true) and
-// @Mapping(target = "user", ignore = true) on toRole mean RoleFromDTO only
-// copies the name. The id and the back-reference to the owning user stay
-// unset. When the user is saved, the repository/service links roles to their
-// user, as JdbcUserRepositoryImpl and UserServiceImpl did.
+// MIGRATION_NOTE: The model package has no zero-argument constructors.
+//   - Users are built with model.NewUser(username, password).
+//   - Roles are built with model.NewRole(name, user), the same constructor
+//     that User.AddRole uses.
+// @Mapping(target = "id", ignore = true) and @Mapping(target = "user",
+// ignore = true) on toRole mean RoleFromDTO only copies the name. It passes a
+// nil owning user to model.NewRole, and the id stays unset. When the user is
+// saved, the repository/service links roles to their user, as
+// JdbcUserRepositoryImpl and UserServiceImpl did.
 //
-// REQUIRES MANUAL REVIEW: The accessor signatures used below are taken from
-// the migrated model package (internal/model/user.go and role.go):
+// REQUIRES MANUAL REVIEW: The accessor signatures below are taken from the
+// migrated model package (internal/model/user.go and role.go):
+//   - NewUser(username, password string) *User
+//   - NewRole(name string, user *User) *Role
 //   - GetEnabled/SetEnabled use *bool.
 //   - GetRoles/SetRoles use []*model.Role.
-// Adjust these calls if those signatures differ.
+// Adjust these calls if those signatures differ, for example if the
+// constructors also return an error.
 
 import (
 	"migrated-app/internal/model"
@@ -58,14 +65,13 @@ type UserDTO struct {
 
 // RoleFromDTO converts a RoleDTO into a Role entity (port of toRole).
 // Only the name is copied. The id and the owning-user back-reference are
-// intentionally left unset. A nil DTO yields nil.
+// intentionally left unset, so a nil user is passed to model.NewRole.
+// A nil DTO yields nil.
 func RoleFromDTO(dto *RoleDTO) *model.Role {
 	if dto == nil {
 		return nil
 	}
-	role := model.NewRole()
-	role.SetName(dto.Name)
-	return role
+	return model.NewRole(dto.Name, nil)
 }
 
 // RoleToDTO converts a Role entity into a RoleDTO by copying the name
@@ -106,15 +112,13 @@ func RolesFromDTOs(dtos []*RoleDTO) []*model.Role {
 }
 
 // UserFromDTO converts a UserDTO into a User entity (port of toUser).
-// It copies username, password and enabled, and maps the roles with
-// RolesFromDTOs. A nil DTO yields nil.
+// Username and password are passed to model.NewUser. Enabled is copied, and
+// the roles are mapped with RolesFromDTOs. A nil DTO yields nil.
 func UserFromDTO(dto *UserDTO) *model.User {
 	if dto == nil {
 		return nil
 	}
-	user := model.NewUser()
-	user.SetUsername(dto.Username)
-	user.SetPassword(dto.Password)
+	user := model.NewUser(dto.Username, dto.Password)
 	user.SetEnabled(copyBoolPtr(dto.Enabled))
 	user.SetRoles(RolesFromDTOs(dto.Roles))
 	return user
