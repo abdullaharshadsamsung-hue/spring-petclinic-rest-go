@@ -254,14 +254,14 @@ func disabledSecurity(next http.Handler) http.Handler {
 }
 
 func buildRouter() http.Handler {
-	cfg, err := config.Load()
+	cfg, err := config.Load(os.Args[1:])
 	if err != nil {
 		log.Fatal().Err(err).Msg("loading config")
 	}
-	if cfg.DatabaseURL == "" {
-		log.Warn().Msg("DATABASE_URL is not set; database-backed endpoints will fail")
+	if cfg.DBDriver != config.DriverPostgres {
+		log.Warn().Str("driver", cfg.DBDriver).Msg("only postgres is supported by this server; set DATABASE_URL or POSTGRES_URL")
 	}
-	db, err := sql.Open("postgres", cfg.DatabaseURL)
+	db, err := sql.Open("postgres", cfg.DSN)
 	if err != nil {
 		log.Fatal().Err(err).Msg("opening database")
 	}
