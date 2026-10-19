@@ -20,6 +20,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"migrated-app/internal/store"
 	"migrated-app/internal/store/sqlstore"
 )
 
@@ -200,7 +201,7 @@ func handleValidation(w http.ResponseWriter, r *http.Request, verr *ValidationEr
 }
 
 func isIntegrityViolation(err error) bool {
-	if errors.Is(err, ErrIntegrity) {
+	if errors.Is(err, ErrIntegrity) || errors.Is(err, store.ErrIntegrity) {
 		return true
 	}
 	var iv IntegrityViolation
