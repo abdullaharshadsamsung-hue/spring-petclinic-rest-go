@@ -152,7 +152,7 @@ func (r *OwnerRepository) GetPetTypes(ctx context.Context) ([]*model.PetType, er
 
 // FindAll returns every owner with pets, pet types and visits loaded.
 func (r *OwnerRepository) FindAll(ctx context.Context) ([]*model.Owner, error) {
-	owners, err := r.queryOwners(ctx, "SELECT "+ownerColumns+" FROM owners ORDER BY id")
+	owners, err := r.queryOwners(ctx, "SELECT "+ownerColumns+" FROM owners")
 	if err != nil {
 		return nil, fmt.Errorf("find all owners: %w", err)
 	}
