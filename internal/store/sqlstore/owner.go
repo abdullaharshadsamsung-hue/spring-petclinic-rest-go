@@ -217,6 +217,9 @@ func (r *OwnerRepository) Delete(ctx context.Context, owner *model.Owner) (err e
 		if _, err = tx.ExecContext(ctx, "DELETE FROM pets WHERE id = $1", *pet.GetID()); err != nil {
 			return fmt.Errorf("delete pet %d: %w", *pet.GetID(), err)
 		}
+		if err = deleteCascadedPetType(ctx, tx, pet); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM owners WHERE id = $1", *owner.ID); err != nil {
 		return fmt.Errorf("delete owner %d: %w", *owner.ID, err)
