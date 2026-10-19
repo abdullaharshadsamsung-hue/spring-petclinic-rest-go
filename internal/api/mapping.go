@@ -1,100 +1,29 @@
-// Package api contains the HTTP layer of the petclinic application: DTOs,
-// entity<->DTO mappers, validation, problem responses and routing.
+// Package mapper converts between the petclinic domain model and the REST
+// DTOs. It replaces the MapStruct mapper interfaces of the source project.
 //
-// This file holds the hand-written replacements for the MapStruct mappers
-// PetMapper, PetTypeMapper and VisitMapper.
+// This file replaces PetMapper. It also contains the pet type and visit
+// mapping that PetMapper delegates to (MapStruct's uses = VisitMapper.class
+// and its built-in PetType <-> PetTypeDto methods).
 //
 // MIGRATION_NOTE: MapStruct generated these mappers at compile time from
-// annotations. In Go they are plain functions. Name-based implicit mapping is
-// written out field by field. Collection mapping is written as range loops.
-// The source's overloaded toPet(PetDto) / toPet(PetFieldsDto) become
-// PetFromDTO and PetFromFieldsDTO.
+// annotations. In Go they are plain functions, and name-based implicit mapping
+// is written out field by field. The source's overloaded toPet(PetDto) and
+// toPet(PetFieldsDto) become PetFromDTO and PetFromFieldsDTO. Collection
+// methods are written as range loops.
 //
-// Behaviour preserved from the generated code:
+// Behaviour preserved from the MapStruct-generated code:
 //   - A nil entity or DTO maps to nil.
-//   - Response slices are never nil, so JSON renders [] rather than null.
-//   - Nullable scalars (id, birthDate, date, type, ownerId, petId) are
-//     pointers. The mapper copies the source value as is, including nil, and
-//     never substitutes a constructor default.
-//
-// REQUIRES MANUAL REVIEW: this file was written without access to the
-// model/*.go sources. Check the following accessor names and types against
-// internal/model:
-//   - Pet.Get/SetBirthDate (*time.Time)
-//   - Pet.Get/SetType (*PetType)
-//   - Pet.SetOwner(OwnerRef)
-//   - Pet.GetOwnerID (*int)
-//   - Pet.Get/SetVisits ([]*Visit)
-//   - Owner, PetType and Visit fields: ID *int, Name string, Date *time.Time,
-//     Description string, Pet *Pet
-package api
+//   - A nil collection maps to nil (JSON null), as MapStruct does.
+//   - A nil element in a collection maps to a nil element; it is not dropped.
+//   - Nullable scalars (id, birthDate, date, ownerId, petId) are pointers and
+//     are copied as is, nil included. No constructor default is substituted.
+//   - toPet(PetDto) always creates the nested owner for target "owner.id",
+//     even when ownerId is null.
+package mapper
 
 import (
-	"encoding/json"
-	"fmt"
-	"sort"
-	"strings"
-	"time"
-
 	"migrated-app/internal/model"
 )
-
-// localDateLayout is the ISO-8601 calendar date layout used by the REST API.
-// It corresponds to java.time.LocalDate.
-const localDateLayout = "2006-01-02"
-
-// LocalDate is a calendar date without a time zone. In JSON it is
-// serialised as "yyyy-MM-dd", matching Jackson's LocalDate handling.
-type LocalDate struct {
-	time.Time
-}
-
-// NewLocalDate truncates t to a calendar date.
-func NewLocalDate(t time.Time) LocalDate {
-	y, m, d := t.Date()
-	return LocalDate{Time: time.Date(y, m, d, 0, 0, 0, 0, time.UTC)}
-}
-
-// MarshalJSON renders the date as "yyyy-MM-dd".
-func (d LocalDate) MarshalJSON() ([]byte, error) {
-	return json.Marshal(d.Format(localDateLayout))
-}
-
-// UnmarshalJSON parses a "yyyy-MM-dd" date.
-func (d *LocalDate) UnmarshalJSON(b []byte) error {
-	s := strings.TrimSpace(string(b))
-	if s == "null" {
-		return nil
-	}
-	var str string
-	if err := json.Unmarshal(b, &str); err != nil {
-		return fmt.Errorf("local date: %w", err)
-	}
-	t, err := time.Parse(localDateLayout, str)
-	if err != nil {
-		return fmt.Errorf("local date %q: %w", str, err)
-	}
-	d.Time = t
-	return nil
-}
-
-// toLocalDate converts a nullable time into a nullable LocalDate.
-func toLocalDate(t *time.Time) *LocalDate {
-	if t == nil {
-		return nil
-	}
-	d := NewLocalDate(*t)
-	return &d
-}
-
-// fromLocalDate converts a nullable LocalDate into a nullable time.
-func fromLocalDate(d *LocalDate) *time.Time {
-	if d == nil {
-		return nil
-	}
-	t := d.Time
-	return &t
-}
 
 // copyIntPtr returns an independent copy of a nullable int.
 func copyIntPtr(p *int) *int {
@@ -105,20 +34,67 @@ func copyIntPtr(p *int) *int {
 	return &v
 }
 
-// ---------------------------------------------------------------------------
-// Pet types
-// ---------------------------------------------------------------------------
-
-// PetTypeFieldsDTO holds the editable fields of a pet type.
-type PetTypeFieldsDTO struct {
-	Name string `json:"name"`
+// copyDatePtr returns an independent copy of a nullable model.Date.
+//
+// MIGRATION_NOTE: the DTOs use model.Date (the domain's calendar-date type,
+// declared in internal/model/visit.go) directly instead of a separate DTO date
+// type. This removes all date conversions, so the mapper does not depend on
+// the internal layout of model.Date.
+func copyDatePtr(p *model.Date) *model.Date {
+	if p == nil {
+		return nil
+	}
+	d := *p
+	return &d
 }
+
+// ---------------------------------------------------------------------------
+// DTOs
+// ---------------------------------------------------------------------------
 
 // PetTypeDTO is the REST representation of a pet type.
 type PetTypeDTO struct {
 	Name string `json:"name"`
 	ID   *int   `json:"id"`
 }
+
+// VisitDTO is the REST representation of a visit.
+type VisitDTO struct {
+	ID          *int        `json:"id"`
+	Date        *model.Date `json:"date"`
+	Description string      `json:"description"`
+	PetID       *int        `json:"petId"`
+}
+
+// PetFieldsDTO holds the editable fields of a pet.
+type PetFieldsDTO struct {
+	Name      string      `json:"name"`
+	BirthDate *model.Date `json:"birthDate"`
+	Type      *PetTypeDTO `json:"type"`
+}
+
+// PetDTO is the REST representation of a pet.
+type PetDTO struct {
+	Name      string      `json:"name"`
+	BirthDate *model.Date `json:"birthDate"`
+	Type      *PetTypeDTO `json:"type"`
+	ID        *int        `json:"id"`
+	OwnerID   *int        `json:"ownerId"`
+	Visits    []*VisitDTO `json:"visits"`
+}
+
+// PetPageDTO is one page of pets plus pagination metadata.
+type PetPageDTO struct {
+	Content       []*PetDTO `json:"content"`
+	Page          int       `json:"page"`
+	Size          int       `json:"size"`
+	TotalElements int64     `json:"totalElements"`
+	TotalPages    int       `json:"totalPages"`
+}
+
+// ---------------------------------------------------------------------------
+// Pet types
+// ---------------------------------------------------------------------------
 
 // PetTypeToDTO converts a PetType entity into a PetTypeDTO. A nil input
 // returns nil.
@@ -130,15 +106,6 @@ func PetTypeToDTO(pt *model.PetType) *PetTypeDTO {
 		ID:   copyIntPtr(pt.ID),
 		Name: pt.Name,
 	}
-}
-
-// PetTypeToFieldsDTO converts a PetType entity into its editable fields. A
-// nil input returns nil.
-func PetTypeToFieldsDTO(pt *model.PetType) *PetTypeFieldsDTO {
-	if pt == nil {
-		return nil
-	}
-	return &PetTypeFieldsDTO{Name: pt.Name}
 }
 
 // PetTypeFromDTO converts a PetTypeDTO into a PetType entity. A nil input
@@ -153,102 +120,82 @@ func PetTypeFromDTO(dto *PetTypeDTO) *model.PetType {
 	return pt
 }
 
-// PetTypeFromFieldsDTO converts editable pet type fields into a new PetType
-// entity with no id. A nil input returns nil.
-func PetTypeFromFieldsDTO(dto *PetTypeFieldsDTO) *model.PetType {
-	if dto == nil {
+// PetTypesToDTOs converts a slice of PetType entities into DTOs. A nil slice
+// returns nil, and nil elements map to nil elements.
+func PetTypesToDTOs(types []*model.PetType) []*PetTypeDTO {
+	if types == nil {
 		return nil
 	}
-	pt := &model.PetType{}
-	pt.Name = dto.Name
-	return pt
-}
-
-// PetTypesToDTOs converts a slice of PetType entities into DTOs. The result
-// is never nil. Nil elements are skipped.
-func PetTypesToDTOs(types []*model.PetType) []PetTypeDTO {
-	out := make([]PetTypeDTO, 0, len(types))
+	out := make([]*PetTypeDTO, 0, len(types))
 	for _, pt := range types {
-		if dto := PetTypeToDTO(pt); dto != nil {
-			out = append(out, *dto)
-		}
+		out = append(out, PetTypeToDTO(pt))
 	}
 	return out
 }
 
 // ---------------------------------------------------------------------------
-// Visits
+// Visits (delegated mapper, VisitMapper in the source)
 // ---------------------------------------------------------------------------
 
-// VisitFieldsDTO holds the editable fields of a visit.
-type VisitFieldsDTO struct {
-	Date        *LocalDate `json:"date"`
-	Description string     `json:"description"`
-}
-
-// VisitDTO is the REST representation of a visit.
-type VisitDTO struct {
-	ID          *int       `json:"id"`
-	Date        *LocalDate `json:"date"`
-	Description string     `json:"description"`
-	PetID       *int       `json:"petId"`
-}
-
-// VisitToDTO converts a Visit entity into a VisitDTO. petId is copied from
-// the visit's pet. A nil input returns nil.
+// VisitToDTO converts a Visit entity into a VisitDTO. petId is taken from the
+// visit's PetID foreign key. A nil input returns nil.
+//
+// MIGRATION_NOTE: the source read visit.pet.id. In the Go model Visit.Pet is
+// the PetRef interface, which has no id, and the id is stored in the PetID
+// column field. The output is the same.
 func VisitToDTO(v *model.Visit) *VisitDTO {
 	if v == nil {
 		return nil
 	}
-	dto := &VisitDTO{
+	return &VisitDTO{
 		ID:          copyIntPtr(v.ID),
-		Date:        toLocalDate(v.Date),
+		Date:        copyDatePtr(v.Date),
 		Description: v.Description,
+		PetID:       copyIntPtr(v.PetID),
 	}
-	if v.Pet != nil {
-		dto.PetID = copyIntPtr(v.Pet.ID)
-	}
-	return dto
 }
 
-// VisitFromDTO converts a VisitDTO into a Visit entity. The pet reference
-// carries only the id taken from petId. A nil input returns nil.
+// VisitFromDTO converts a VisitDTO into a Visit entity. petId sets the
+// visit's PetID foreign key. A nil input returns nil.
+//
+// MIGRATION_NOTE: the source built a Pet holding only the id (target
+// "pet.id"). In Go the foreign key Visit.PetID carries that id, which is what
+// the store layer persists. Visit.Pet stays nil. Callers that need the loaded
+// pet resolve it through the service using PetID, as the source handlers do.
 func VisitFromDTO(dto *VisitDTO) *model.Visit {
 	if dto == nil {
 		return nil
 	}
 	v := &model.Visit{}
 	v.ID = copyIntPtr(dto.ID)
-	v.Date = fromLocalDate(dto.Date)
+	v.Date = copyDatePtr(dto.Date)
 	v.Description = dto.Description
-	if dto.PetID != nil {
-		p := &model.Pet{}
-		p.ID = copyIntPtr(dto.PetID)
-		v.Pet = p
-	}
+	v.PetID = copyIntPtr(dto.PetID)
 	return v
 }
 
-// VisitFromFieldsDTO converts editable visit fields into a new Visit entity
-// with no id and no pet. A nil input returns nil.
-func VisitFromFieldsDTO(dto *VisitFieldsDTO) *model.Visit {
-	if dto == nil {
+// VisitsToDTOs converts a slice of Visit entities into DTOs. A nil slice
+// returns nil, and nil elements map to nil elements.
+func VisitsToDTOs(visits []*model.Visit) []*VisitDTO {
+	if visits == nil {
 		return nil
 	}
-	v := &model.Visit{}
-	v.Date = fromLocalDate(dto.Date)
-	v.Description = dto.Description
-	return v
+	out := make([]*VisitDTO, 0, len(visits))
+	for _, v := range visits {
+		out = append(out, VisitToDTO(v))
+	}
+	return out
 }
 
-// VisitsToDTOs converts a slice of Visit entities into DTOs. The result is
-// never nil. Nil elements are skipped.
-func VisitsToDTOs(visits []*model.Visit) []VisitDTO {
-	out := make([]VisitDTO, 0, len(visits))
-	for _, v := range visits {
-		if dto := VisitToDTO(v); dto != nil {
-			out = append(out, *dto)
-		}
+// visitsFromDTOs converts a slice of VisitDTOs into Visit entities. A nil
+// slice returns nil, and nil elements map to nil elements.
+func visitsFromDTOs(dtos []*VisitDTO) []*model.Visit {
+	if dtos == nil {
+		return nil
+	}
+	out := make([]*model.Visit, 0, len(dtos))
+	for _, d := range dtos {
+		out = append(out, VisitFromDTO(d))
 	}
 	return out
 }
@@ -257,58 +204,9 @@ func VisitsToDTOs(visits []*model.Visit) []VisitDTO {
 // Pets
 // ---------------------------------------------------------------------------
 
-// PetFieldsDTO holds the editable fields of a pet.
-type PetFieldsDTO struct {
-	Name      string      `json:"name"`
-	BirthDate *LocalDate  `json:"birthDate"`
-	Type      *PetTypeDTO `json:"type"`
-}
-
-// PetDTO is the REST representation of a pet.
-type PetDTO struct {
-	Name      string      `json:"name"`
-	BirthDate *LocalDate  `json:"birthDate"`
-	Type      *PetTypeDTO `json:"type"`
-	ID        *int        `json:"id"`
-	OwnerID   *int        `json:"ownerId"`
-	Visits    []VisitDTO  `json:"visits"`
-}
-
-// PetPageDTO is a page of pets plus pagination metadata.
-type PetPageDTO struct {
-	Content       []PetDTO `json:"content"`
-	Page          int      `json:"page"`
-	Size          int      `json:"size"`
-	TotalElements int64    `json:"totalElements"`
-	TotalPages    int      `json:"totalPages"`
-}
-
-// sortedVisitsDesc returns a copy of visits ordered by date, newest first.
-// Visits without a date go last. This matches Pet.getVisits() in the source.
-func sortedVisitsDesc(visits []*model.Visit) []*model.Visit {
-	out := make([]*model.Visit, 0, len(visits))
-	for _, v := range visits {
-		if v != nil {
-			out = append(out, v)
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		di, dj := out[i].Date, out[j].Date
-		switch {
-		case di == nil:
-			return false
-		case dj == nil:
-			return true
-		default:
-			return di.After(*dj)
-		}
-	})
-	return out
-}
-
-// PetToDTO converts a Pet entity into a PetDTO. It copies the scalar fields,
-// maps the pet type, maps the visits (newest first) and sets ownerId from the
-// owner's id. A nil input returns nil.
+// PetToDTO converts a Pet entity into a PetDTO. ownerId comes from the
+// owner's id. Visits come from Pet.GetVisits, which returns them newest
+// first, as Pet.getVisits() does in the source. A nil input returns nil.
 func PetToDTO(p *model.Pet) *PetDTO {
 	if p == nil {
 		return nil
@@ -316,33 +214,32 @@ func PetToDTO(p *model.Pet) *PetDTO {
 	return &PetDTO{
 		ID:        copyIntPtr(p.ID),
 		Name:      p.Name,
-		BirthDate: toLocalDate(p.GetBirthDate()),
+		BirthDate: copyDatePtr(p.GetBirthDate()),
 		Type:      PetTypeToDTO(p.GetType()),
 		OwnerID:   copyIntPtr(p.GetOwnerID()),
-		Visits:    VisitsToDTOs(sortedVisitsDesc(p.GetVisits())),
+		Visits:    VisitsToDTOs(p.GetVisits()),
 	}
 }
 
-// PetsToDTOs converts a slice of Pet entities into DTOs. The result is never
-// nil. Nil elements are skipped.
-func PetsToDTOs(pets []*model.Pet) []PetDTO {
-	out := make([]PetDTO, 0, len(pets))
+// PetsToDTOs converts a slice of Pet entities into DTOs. A nil slice returns
+// nil, and nil elements map to nil elements, as in MapStruct's toPetsDto.
+func PetsToDTOs(pets []*model.Pet) []*PetDTO {
+	if pets == nil {
+		return nil
+	}
+	out := make([]*PetDTO, 0, len(pets))
 	for _, p := range pets {
-		if dto := PetToDTO(p); dto != nil {
-			out = append(out, *dto)
-		}
+		out = append(out, PetToDTO(p))
 	}
 	return out
 }
 
-// PetFromDTO converts a PetDTO into a Pet entity. When ownerId is set, it
-// attaches an owner reference that carries only that id. Visits are mapped
-// through VisitFromDTO. A nil input returns nil.
+// PetFromDTO converts a PetDTO into a Pet entity. A nil input returns nil.
 //
-// MIGRATION_NOTE: MapStruct always created the nested owner for
-// target="owner.id". Here the owner is created only when ownerId is non-nil,
-// which avoids an empty owner with a null id. This does not change any
-// observable behaviour.
+// As in the MapStruct-generated code for target "owner.id", an owner
+// reference is always attached and carries only dto.OwnerID (which may be
+// nil). Visits are mapped through VisitFromDTO. A nil visits slice leaves the
+// pet's visits untouched.
 func PetFromDTO(dto *PetDTO) *model.Pet {
 	if dto == nil {
 		return nil
@@ -350,44 +247,43 @@ func PetFromDTO(dto *PetDTO) *model.Pet {
 	p := &model.Pet{}
 	p.ID = copyIntPtr(dto.ID)
 	p.Name = dto.Name
-	p.SetBirthDate(fromLocalDate(dto.BirthDate))
+	p.SetBirthDate(copyDatePtr(dto.BirthDate))
 	p.SetType(PetTypeFromDTO(dto.Type))
-	if dto.OwnerID != nil {
-		owner := &model.Owner{}
-		owner.ID = copyIntPtr(dto.OwnerID)
-		p.SetOwner(owner)
+
+	owner := &model.Owner{}
+	owner.ID = copyIntPtr(dto.OwnerID)
+	p.SetOwner(owner)
+
+	if dto.Visits != nil {
+		p.SetVisits(visitsFromDTOs(dto.Visits))
 	}
-	visits := make([]*model.Visit, 0, len(dto.Visits))
-	for i := range dto.Visits {
-		if v := VisitFromDTO(&dto.Visits[i]); v != nil {
-			visits = append(visits, v)
-		}
-	}
-	p.SetVisits(visits)
 	return p
 }
 
-// PetsFromDTOs converts a slice of PetDTOs into Pet entities. The result is
-// never nil.
-func PetsFromDTOs(dtos []PetDTO) []*model.Pet {
+// PetsFromDTOs converts a slice of PetDTOs into Pet entities. A nil slice
+// returns nil, and nil elements map to nil elements, as in MapStruct's
+// toPets.
+func PetsFromDTOs(dtos []*PetDTO) []*model.Pet {
+	if dtos == nil {
+		return nil
+	}
 	out := make([]*model.Pet, 0, len(dtos))
-	for i := range dtos {
-		if p := PetFromDTO(&dtos[i]); p != nil {
-			out = append(out, p)
-		}
+	for _, d := range dtos {
+		out = append(out, PetFromDTO(d))
 	}
 	return out
 }
 
-// PetFromFieldsDTO converts editable pet fields into a new Pet entity. The
-// id, owner and visits are left unset. A nil input returns nil.
+// PetFromFieldsDTO converts editable pet fields into a new Pet entity. The id,
+// owner and visits are not set, matching the ignore=true mappings in the
+// source. A nil input returns nil.
 func PetFromFieldsDTO(dto *PetFieldsDTO) *model.Pet {
 	if dto == nil {
 		return nil
 	}
 	p := &model.Pet{}
 	p.Name = dto.Name
-	p.SetBirthDate(fromLocalDate(dto.BirthDate))
+	p.SetBirthDate(copyDatePtr(dto.BirthDate))
 	p.SetType(PetTypeFromDTO(dto.Type))
 	return p
 }
@@ -395,12 +291,18 @@ func PetFromFieldsDTO(dto *PetFieldsDTO) *model.Pet {
 // PetPageToDTO builds a PetPageDTO from one page of pets and its pagination
 // metadata. page is zero-based, as in Spring Data's Page.getNumber().
 //
-// MIGRATION_NOTE: the source took a Spring Data Page<Pet>. Here the caller
-// passes the page's content and metadata explicitly, so this package does not
-// depend on any particular paging type in the store layer.
+// MIGRATION_NOTE: the source took a Spring Data Page<Pet>, which is declared
+// @NonNull and whose content is never null. Here the caller passes the page
+// content and metadata explicitly, so this package does not depend on a
+// paging type from the store layer. A nil content slice becomes an empty
+// slice, so JSON renders [] as the source did. Nil elements are kept.
 func PetPageToDTO(content []*model.Pet, page, size int, totalElements int64, totalPages int) PetPageDTO {
+	dtos := PetsToDTOs(content)
+	if dtos == nil {
+		dtos = []*PetDTO{}
+	}
 	return PetPageDTO{
-		Content:       PetsToDTOs(content),
+		Content:       dtos,
 		Page:          page,
 		Size:          size,
 		TotalElements: totalElements,
