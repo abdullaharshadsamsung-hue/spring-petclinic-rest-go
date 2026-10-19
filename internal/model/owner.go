@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -55,6 +56,30 @@ type Owner struct {
 	// pets is the internal pet collection, with set semantics by identity.
 	// Pet owns the owner_id foreign key (mappedBy = "owner").
 	pets []*Pet
+}
+
+// ownerJSON is the wire shape of an Owner, including its pets.
+type ownerJSON struct {
+	ID        *int   `json:"id"`
+	FirstName string `json:"firstName"`
+	LastName  string `json:"lastName"`
+	Address   string `json:"address"`
+	City      string `json:"city"`
+	Telephone string `json:"telephone"`
+	Pets      []*Pet `json:"pets"`
+}
+
+// MarshalJSON encodes the owner together with its pets (sorted by name).
+func (o Owner) MarshalJSON() ([]byte, error) {
+	return json.Marshal(ownerJSON{
+		ID:        o.ID,
+		FirstName: o.FirstName,
+		LastName:  o.LastName,
+		Address:   o.Address,
+		City:      o.City,
+		Telephone: o.Telephone,
+		Pets:      o.GetPets(),
+	})
 }
 
 // NewOwner returns an empty, new (unsaved) Owner.
