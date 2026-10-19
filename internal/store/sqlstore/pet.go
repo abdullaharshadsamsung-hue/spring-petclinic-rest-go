@@ -182,8 +182,29 @@ func (r *PetRepository) Delete(ctx context.Context, pet *model.Pet) (err error) 
 	if _, err = tx.ExecContext(ctx, "DELETE FROM pets WHERE id = $1", petID); err != nil {
 		return fmt.Errorf("delete pet %d: %w", petID, err)
 	}
+	if err = deleteCascadedPetType(ctx, tx, pet); err != nil {
+		return err
+	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("delete pet %d: commit: %w", petID, err)
+	}
+	return nil
+}
+
+// deleteCascadedPetType mirrors the source's @ManyToOne(cascade = ALL) on
+// Pet.type: removing a pet also removes its pet type. The type is only
+// removed when no other pet still references it (JPA would otherwise fail
+// on the foreign key).
+func deleteCascadedPetType(ctx context.Context, tx *sql.Tx, pet *model.Pet) error {
+	pt := pet.GetType()
+	if pt == nil || pt.GetID() == nil {
+		return nil
+	}
+	typeID := *pt.GetID()
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM types WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM pets WHERE type_id = $1)",
+		typeID); err != nil {
+		return fmt.Errorf("delete pet type %d: %w", typeID, err)
 	}
 	return nil
 }
