@@ -1,164 +1,146 @@
 package api
 
-// This file is the Go port of the MapStruct VetMapper interface
-// (org.springframework.samples.petclinic.mapper.VetMapper) and of the REST
-// DTOs it converts between (VetDto and VetFieldsDto).
+// This file is the Go port of the MapStruct UserMapper interface
+// (org.springframework.samples.petclinic.mapper.UserMapper). MapStruct
+// generated UserMapperImpl at compile time; here the mappers are plain,
+// hand-written functions.
 //
-// MIGRATION_NOTE: MapStruct generated VetMapperImpl at compile time, matching
-// properties by name. Here every mapping is a hand-written function, so each
-// field copy is explicit. Go has no method overloading, so the two Java
-// toVet(VetDto) and toVet(VetFieldsDto) methods become VetFromDTO and
-// VetFromFieldsDTO. @Mapper(uses = SpecialtyMapper.class) becomes calls to
-// SpecialtiesToDTOs and SpecialtiesFromDTOs (specialty_mapping.go), which work
-// on pointer slices. The value/pointer slice adaptation is done in the
-// unexported helpers at the bottom of this file. MapStruct returned null for
-// null input, and these functions return nil for nil input.
+// MIGRATION_NOTE: The vet mappers (VetToDTO, VetsToDTOs, VetFromDTO,
+// VetFromFieldsDTO, VetDTO, VetFieldsDTO) also live in internal/api/mapping.go.
+// If this output replaces that file instead of being merged into it, those
+// declarations must be carried over (or moved to vet_mapping.go). Otherwise
+// mapping_test.go and the vet handlers will no longer compile.
 //
-// Type contracts relied on (from internal/model):
-//   - model.Vet.ID is *int (nil means "not persisted yet")
-//   - model.Vet.GetSpecialties() []model.Specialty (sorted by name, as in the source)
-//   - model.Vet.SetSpecialties([]model.Specialty)
+// MIGRATION_NOTE: MapStruct's null semantics are kept on purpose:
+//   - A nil input object maps to nil.
+//   - A nil collection maps to a nil slice, which encodes as JSON null, the
+//     same as Jackson's default output for a null field.
+//   - A nil element inside a collection maps to a nil element, so the output
+//     length always equals the input length.
+//
+// MIGRATION_NOTE: @Mapping(target = "id", ignore = true) and
+// @Mapping(target = "user", ignore = true) on toRole mean RoleFromDTO only
+// copies the name. The id and the back-reference to the owning user stay
+// unset. When the user is saved, the repository/service links roles to their
+// user, as JdbcUserRepositoryImpl and UserServiceImpl did.
+//
+// REQUIRES MANUAL REVIEW: The accessor signatures used below are taken from
+// the migrated model package (internal/model/user.go and role.go):
+//   - GetEnabled/SetEnabled use *bool.
+//   - GetRoles/SetRoles use []*model.Role.
+// Adjust these calls if those signatures differ.
 
 import (
 	"migrated-app/internal/model"
 )
 
-// VetFieldsDTO is the editable part of a vet, without the id. It mirrors the
-// OpenAPI VetFields schema.
-type VetFieldsDTO struct {
-	// FirstName is the vet's first name.
-	FirstName string `json:"firstName"`
-	// LastName is the vet's last name.
-	LastName string `json:"lastName"`
-	// Specialties lists the specialties of the vet.
-	Specialties []SpecialtyDTO `json:"specialties"`
+// RoleDTO is the REST representation of a user role. It mirrors the
+// OpenAPI-generated RoleDto, which exposes only the role name.
+type RoleDTO struct {
+	// Name is the role name, e.g. "ROLE_ADMIN" or "OWNER_ADMIN".
+	Name string `json:"name"`
 }
 
-// VetDTO is the REST representation of a vet, including its id. It mirrors
-// the OpenAPI Vet schema.
-type VetDTO struct {
-	// ID is the vet's identifier. It is nil when the vet has not been persisted.
-	ID *int `json:"id,omitempty"`
-	// FirstName is the vet's first name.
-	FirstName string `json:"firstName"`
-	// LastName is the vet's last name.
-	LastName string `json:"lastName"`
-	// Specialties lists the specialties of the vet.
-	Specialties []SpecialtyDTO `json:"specialties"`
+// UserDTO is the REST representation of an application user. It mirrors the
+// OpenAPI-generated UserDto.
+type UserDTO struct {
+	// Username is the unique login name of the user.
+	Username string `json:"username"`
+	// Password is the user's password. It is accepted and returned as-is,
+	// matching the source mapper.
+	Password string `json:"password"`
+	// Enabled reports whether the account is active. It is a pointer so that
+	// an absent/null value is preserved, like Java's Boolean.
+	Enabled *bool `json:"enabled"`
+	// Roles lists the roles granted to the user.
+	Roles []*RoleDTO `json:"roles"`
 }
 
-// VetFromDTO converts a VetDTO, including its id, into a Vet entity. It maps
-// id, firstName, lastName and specialties. A nil input returns nil.
-func VetFromDTO(dto *VetDTO) *model.Vet {
+// RoleFromDTO converts a RoleDTO into a Role entity (port of toRole).
+// Only the name is copied. The id and the owning-user back-reference are
+// intentionally left unset. A nil DTO yields nil.
+func RoleFromDTO(dto *RoleDTO) *model.Role {
 	if dto == nil {
 		return nil
 	}
-	vet := model.NewVet()
-	if dto.ID != nil {
-		// Copy the value so the entity does not alias the DTO's memory.
-		id := *dto.ID
-		vet.ID = &id
-	}
-	vet.FirstName = dto.FirstName
-	vet.LastName = dto.LastName
-	if dto.Specialties != nil {
-		vet.SetSpecialties(specialtiesFromDTOValues(dto.Specialties))
-	}
-	return vet
+	role := model.NewRole()
+	role.SetName(dto.Name)
+	return role
 }
 
-// VetFromFieldsDTO converts a VetFieldsDTO into a new Vet entity. The id is
-// deliberately left unset (nil), matching @Mapping(target = "id", ignore = true)
-// in the source. A nil input returns nil.
-func VetFromFieldsDTO(dto *VetFieldsDTO) *model.Vet {
-	if dto == nil {
+// RoleToDTO converts a Role entity into a RoleDTO by copying the name
+// (port of toRoleDto). A nil role yields nil.
+func RoleToDTO(role *model.Role) *RoleDTO {
+	if role == nil {
 		return nil
 	}
-	vet := model.NewVet()
-	// The id is intentionally not mapped and stays nil (new entity).
-	vet.FirstName = dto.FirstName
-	vet.LastName = dto.LastName
-	if dto.Specialties != nil {
-		vet.SetSpecialties(specialtiesFromDTOValues(dto.Specialties))
-	}
-	return vet
+	return &RoleDTO{Name: role.GetName()}
 }
 
-// VetToDTO converts a Vet entity into a VetDTO, including id, firstName,
-// lastName and specialties. A nil input returns nil.
-func VetToDTO(vet *model.Vet) *VetDTO {
-	if vet == nil {
+// RolesToDTOs converts a collection of Role entities into RoleDTOs by
+// applying RoleToDTO to each element (port of toRoleDtos). A nil slice yields
+// nil, and nil elements are kept as nil so the lengths match.
+func RolesToDTOs(roles []*model.Role) []*RoleDTO {
+	if roles == nil {
 		return nil
 	}
-	dto := &VetDTO{
-		FirstName:   vet.FirstName,
-		LastName:    vet.LastName,
-		Specialties: specialtiesToDTOValues(vet.GetSpecialties()),
-	}
-	if vet.ID != nil {
-		// Copy the value so the DTO does not alias the entity's memory.
-		id := *vet.ID
-		dto.ID = &id
-	}
-	return dto
-}
-
-// VetsToDTOs converts a slice of Vet entities into VetDTOs, element by element
-// via VetToDTO, keeping the input order and length. A nil input returns nil.
-// A nil element produces a nil entry, exactly as MapStruct added a null entry
-// for a null element.
-func VetsToDTOs(vets []*model.Vet) []*VetDTO {
-	if vets == nil {
-		return nil
-	}
-	dtos := make([]*VetDTO, 0, len(vets))
-	for _, vet := range vets {
-		dtos = append(dtos, VetToDTO(vet))
+	dtos := make([]*RoleDTO, 0, len(roles))
+	for _, role := range roles {
+		dtos = append(dtos, RoleToDTO(role))
 	}
 	return dtos
 }
 
-// specialtiesFromDTOValues converts the value-typed DTO slice used in the vet
-// DTOs into the value-typed entity slice that model.Vet.SetSpecialties takes,
-// delegating each element to the shared specialty mapping.
-func specialtiesFromDTOValues(dtos []SpecialtyDTO) []model.Specialty {
+// RolesFromDTOs converts a collection of RoleDTOs into Role entities by
+// applying RoleFromDTO to each element (port of toRoles). A nil slice yields
+// nil, and nil elements are kept as nil so the lengths match.
+func RolesFromDTOs(dtos []*RoleDTO) []*model.Role {
 	if dtos == nil {
 		return nil
 	}
-	ptrs := make([]*SpecialtyDTO, 0, len(dtos))
-	for i := range dtos {
-		ptrs = append(ptrs, &dtos[i])
+	roles := make([]*model.Role, 0, len(dtos))
+	for _, dto := range dtos {
+		roles = append(roles, RoleFromDTO(dto))
 	}
-	converted := SpecialtiesFromDTOs(ptrs)
-	specialties := make([]model.Specialty, 0, len(converted))
-	for _, s := range converted {
-		if s == nil {
-			// Cannot happen for non-nil input. A Vet's specialty set holds no
-			// null entries, so this one is skipped.
-			continue
-		}
-		specialties = append(specialties, *s)
-	}
-	return specialties
+	return roles
 }
 
-// specialtiesToDTOValues converts the value-typed entity slice returned by
-// model.Vet.GetSpecialties into the value-typed DTO slice used in VetDTO,
-// delegating each element to the shared specialty mapping. It always returns a
-// non-nil slice, so JSON shows [] rather than null. This matches the Java
-// getter, which never returned null.
-func specialtiesToDTOValues(specialties []model.Specialty) []SpecialtyDTO {
-	ptrs := make([]*model.Specialty, 0, len(specialties))
-	for i := range specialties {
-		ptrs = append(ptrs, &specialties[i])
+// UserFromDTO converts a UserDTO into a User entity (port of toUser).
+// It copies username, password and enabled, and maps the roles with
+// RolesFromDTOs. A nil DTO yields nil.
+func UserFromDTO(dto *UserDTO) *model.User {
+	if dto == nil {
+		return nil
 	}
-	converted := SpecialtiesToDTOs(ptrs)
-	dtos := make([]SpecialtyDTO, 0, len(converted))
-	for _, d := range converted {
-		if d == nil {
-			continue
-		}
-		dtos = append(dtos, *d)
+	user := model.NewUser()
+	user.SetUsername(dto.Username)
+	user.SetPassword(dto.Password)
+	user.SetEnabled(copyBoolPtr(dto.Enabled))
+	user.SetRoles(RolesFromDTOs(dto.Roles))
+	return user
+}
+
+// UserToDTO converts a User entity into a UserDTO (port of toUserDto).
+// It copies username, password and enabled, and maps the roles with
+// RolesToDTOs. A nil user yields nil.
+func UserToDTO(user *model.User) *UserDTO {
+	if user == nil {
+		return nil
 	}
-	return dtos
+	return &UserDTO{
+		Username: user.GetUsername(),
+		Password: user.GetPassword(),
+		Enabled:  copyBoolPtr(user.GetEnabled()),
+		Roles:    RolesToDTOs(user.GetRoles()),
+	}
+}
+
+// copyBoolPtr returns an independent copy of a *bool, so the DTO and the
+// entity never share mutable state. A nil pointer stays nil.
+func copyBoolPtr(b *bool) *bool {
+	if b == nil {
+		return nil
+	}
+	v := *b
+	return &v
 }
