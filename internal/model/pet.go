@@ -1,6 +1,29 @@
 package model
 
-import "sort"
+import (
+	"encoding/json"
+	"sort"
+)
+
+// MarshalJSON encodes the pet with its visits (newest first), matching the
+// source's PetDto: id, name, birthDate, type, ownerId and visits.
+func (p Pet) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ID        *int     `json:"id"`
+		Name      string   `json:"name"`
+		BirthDate *Date    `json:"birthDate"`
+		Type      *PetType `json:"type"`
+		OwnerID   *int     `json:"ownerId"`
+		Visits    []*Visit `json:"visits"`
+	}{
+		ID:        p.ID,
+		Name:      p.Name,
+		BirthDate: p.BirthDate,
+		Type:      p.Type,
+		OwnerID:   p.GetOwnerID(),
+		Visits:    p.GetVisits(),
+	})
+}
 
 // PetsTable is the name of the database table that stores Pet rows, as
 // mapped by the source's @Table(name = "pets").
