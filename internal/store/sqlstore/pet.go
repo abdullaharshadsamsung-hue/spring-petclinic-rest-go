@@ -119,9 +119,6 @@ func (r *PetRepository) FindAll(ctx context.Context) ([]*model.Pet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("find all pets: %w", err)
 	}
-	if err := r.loadVisits(ctx, result); err != nil {
-		return nil, fmt.Errorf("find all pets: %w", err)
-	}
 	return result, nil
 }
 
