@@ -105,18 +105,23 @@ func (m *OwnerMapper) ToOwnerDto(owner *model.Owner) *OwnerDto {
 	if owner == nil {
 		return nil
 	}
-	id := owner.ID
+	var id *int
+	if owner.ID != nil {
+		v := *owner.ID
+		id = &v
+	}
 	dto := &OwnerDto{
-		ID:        &id,
+		ID:        id,
 		FirstName: owner.FirstName,
 		LastName:  owner.LastName,
 		Address:   owner.Address,
 		City:      owner.City,
 		Telephone: owner.Telephone,
 	}
-	if m.pets != nil && owner.Pets != nil {
-		dto.Pets = make([]PetDto, 0, len(owner.Pets))
-		for _, p := range owner.Pets {
+	if m.pets != nil {
+		pets := owner.GetPets()
+		dto.Pets = make([]PetDto, 0, len(pets))
+		for _, p := range pets {
 			if p == nil {
 				continue
 			}
@@ -138,20 +143,21 @@ func (m *OwnerMapper) ToOwner(dto *OwnerDto) *model.Owner {
 		return nil
 	}
 	owner := &model.Owner{
-		FirstName: dto.FirstName,
-		LastName:  dto.LastName,
+		Person:    model.Person{FirstName: dto.FirstName, LastName: dto.LastName},
 		Address:   dto.Address,
 		City:      dto.City,
 		Telephone: dto.Telephone,
 	}
 	if dto.ID != nil {
-		owner.ID = *dto.ID
+		v := *dto.ID
+		owner.ID = &v
 	}
 	if m.pets != nil && dto.Pets != nil {
-		owner.Pets = make([]*model.Pet, 0, len(dto.Pets))
+		pets := make([]*model.Pet, 0, len(dto.Pets))
 		for _, p := range dto.Pets {
-			owner.Pets = append(owner.Pets, m.pets.ToPet(p))
+			pets = append(pets, m.pets.ToPet(p))
 		}
+		owner.SetPets(pets)
 	}
 	return owner
 }
@@ -168,8 +174,7 @@ func (m *OwnerMapper) ToOwnerFromFields(dto *OwnerFieldsDto) *model.Owner {
 		return nil
 	}
 	return &model.Owner{
-		FirstName: dto.FirstName,
-		LastName:  dto.LastName,
+		Person:    model.Person{FirstName: dto.FirstName, LastName: dto.LastName},
 		Address:   dto.Address,
 		City:      dto.City,
 		Telephone: dto.Telephone,
