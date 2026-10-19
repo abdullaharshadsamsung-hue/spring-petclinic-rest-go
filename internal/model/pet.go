@@ -1,6 +1,9 @@
 package model
 
-import "sort"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // PetsTable is the name of the database table that stores Pet rows, as
 // mapped by the source's @Table(name = "pets").
