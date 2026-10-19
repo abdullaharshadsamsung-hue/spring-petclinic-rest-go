@@ -6,40 +6,46 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"migrated-app/internal/model"
 )
 
-// fakePetRow is a minimal rowScanner returning fixed positional values.
-type fakePetRow struct {
-	values []any
-	err    error
+// fakeRow is an in-memory rowScanner that mimics the conversions
+// database/sql performs for the destination types used by the mappers.
+type fakeRow struct {
+	values    []any
+	scanErr   error
+	scanCalls int
 }
 
-func (r *fakePetRow) Scan(dest ...any) error {
-	if r.err != nil {
-		return r.err
+var errFakeScan = errors.New("fake scan failure")
+
+func (f *fakeRow) Scan(dest ...any) error {
+	f.scanCalls++
+	if f.scanErr != nil {
+		return f.scanErr
 	}
-	if len(dest) != len(r.values) {
-		return fmt.Errorf("expected %d destinations, got %d", len(r.values), len(dest))
+	if len(dest) != len(f.values) {
+		return fmt.Errorf("expected %d destination arguments in Scan, not %d", len(f.values), len(dest))
 	}
 	for i, d := range dest {
-		src := r.values[i]
+		v := f.values[i]
 		switch t := d.(type) {
-		case *int:
-			v, ok := src.(int)
-			if !ok {
-				return fmt.Errorf("column %d: cannot scan %T into int", i, src)
-			}
-			*t = v
-		case **model.Date:
-			if src != nil {
-				return fmt.Errorf("column %d: only NULL dates supported in fake", i)
-			}
-			*t = nil
 		case sql.Scanner:
-			if err := t.Scan(src); err != nil {
-				return err
+			if err := t.Scan(v); err != nil {
+				return fmt.Errorf("column %d: %w", i, err)
+			}
+		case *int:
+			switch n := v.(type) {
+			case int:
+				*t = n
+			case int64:
+				*t = int(n)
+			case nil:
+				return fmt.Errorf("column %d: converting NULL to int is unsupported", i)
+			default:
+				return fmt.Errorf("column %d: unsupported type %T", i, v)
 			}
 		default:
 			return fmt.Errorf("column %d: unsupported destination %T", i, d)
@@ -48,76 +54,163 @@ func (r *fakePetRow) Scan(dest ...any) error {
 	return nil
 }
 
-func TestMapPetRowFullValues(t *testing.T) {
-	p, err := mapPetRow(&fakePetRow{values: []any{7, "Samantha", nil, int64(1), int64(6)}})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestScanVisit(t *testing.T) {
+	d2013 := model.NewDate(2013, time.January, 1)
+	tests := []struct {
+		name     string
+		row      *fakeRow
+		wantErr  bool
+		wantID   int
+		wantDate model.Date
+		wantDesc string
+	}{
+		{
+			name:     "full row from time.Time",
+			row:      &fakeRow{values: []any{int64(1), time.Date(2013, 1, 1, 0, 0, 0, 0, time.UTC), "rabies shot"}},
+			wantID:   1,
+			wantDate: d2013,
+			wantDesc: "rabies shot",
+		},
+		{
+			name:     "date as string and bytes description",
+			row:      &fakeRow{values: []any{int64(7), "2013-01-01", []byte("neutered")}},
+			wantID:   7,
+			wantDate: d2013,
+			wantDesc: "neutered",
+		},
+		{
+			name:     "timestamp text is truncated to date",
+			row:      &fakeRow{values: []any{int64(2), "2013-01-01 10:11:12", "x"}},
+			wantID:   2,
+			wantDate: d2013,
+			wantDesc: "x",
+		},
+		{
+			name:     "NULL description becomes empty string",
+			row:      &fakeRow{values: []any{int64(3), d2013.Time(), nil}},
+			wantID:   3,
+			wantDate: d2013,
+			wantDesc: "",
+		},
+		{name: "NULL visit_id is an error", row: &fakeRow{values: []any{nil, d2013.Time(), "x"}}, wantErr: true},
+		{name: "NULL visit_date is an error", row: &fakeRow{values: []any{int64(1), nil, "x"}}, wantErr: true},
+		{name: "unconvertible visit_date", row: &fakeRow{values: []any{int64(1), "not-a-date", "x"}}, wantErr: true},
+		{name: "unsupported date type", row: &fakeRow{values: []any{int64(1), 42, "x"}}, wantErr: true},
+		{name: "missing column", row: &fakeRow{values: []any{int64(1), d2013.Time()}}, wantErr: true},
+		{name: "underlying scan error", row: &fakeRow{scanErr: errFakeScan}, wantErr: true},
 	}
-	if p == nil || p.ID == nil || *p.ID != 7 {
-		t.Fatalf("unexpected id: %+v", p)
-	}
-	if p.Name != "Samantha" {
-		t.Errorf("name = %q, want Samantha", p.Name)
-	}
-	if p.BirthDate != nil {
-		t.Errorf("birth date = %v, want nil", p.BirthDate)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := scanVisit(tc.row)
+			if tc.row.scanCalls != 1 {
+				t.Errorf("Scan called %d times, want 1", tc.row.scanCalls)
+			}
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got visit %+v", v)
+				}
+				if v != nil {
+					t.Errorf("expected nil visit on error")
+				}
+				if !strings.Contains(err.Error(), "scan visit row") {
+					t.Errorf("error %q lacks context", err)
+				}
+				if tc.row.scanErr != nil && !errors.Is(err, tc.row.scanErr) {
+					t.Errorf("error not wrapped: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if id := v.GetID(); id == nil || *id != tc.wantID {
+				t.Errorf("id = %v, want %d", id, tc.wantID)
+			}
+			if d := v.GetDate(); d == nil || !d.Equal(tc.wantDate) {
+				t.Errorf("date = %v, want %v", d, tc.wantDate)
+			}
+			if v.GetDescription() != tc.wantDesc {
+				t.Errorf("description = %q, want %q", v.GetDescription(), tc.wantDesc)
+			}
+			if v.GetPet() != nil {
+				t.Errorf("pet should be unset")
+			}
+			if v.PetID != nil {
+				t.Errorf("petID should be unset, got %v", *v.PetID)
+			}
+		})
 	}
 }
 
-func TestMapPetRowNullValues(t *testing.T) {
-	p, err := mapPetRow(&fakePetRow{values: []any{3, nil, nil, nil, nil}})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if *p.ID != 3 {
-		t.Errorf("id = %d, want 3", *p.ID)
-	}
-	if p.Name != "" {
-		t.Errorf("name = %q, want empty", p.Name)
-	}
-	if p.BirthDate != nil {
-		t.Errorf("birth date should be nil")
-	}
-}
-
-func TestMapPetRowScanError(t *testing.T) {
-	sentinel := errors.New("boom")
-	p, err := mapPetRow(&fakePetRow{err: sentinel})
-	if p != nil {
-		t.Errorf("expected nil pet, got %+v", p)
-	}
-	if !errors.Is(err, sentinel) {
-		t.Errorf("error %v does not wrap sentinel", err)
-	}
-	if err != nil && !strings.Contains(err.Error(), "map pet row") {
-		t.Errorf("error %q missing context", err)
-	}
-}
-
-func TestMapPetRowDistinctInstances(t *testing.T) {
-	vals := []any{7, "Samantha", nil, int64(1), int64(6)}
-	a, err := mapPetRow(&fakePetRow{values: vals})
+func TestScanVisitReturnsDistinctInstances(t *testing.T) {
+	vals := []any{int64(1), "2013-01-01", "rabies shot"}
+	a, err := scanVisit(&fakeRow{values: vals})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := mapPetRow(&fakePetRow{values: vals})
+	b, err := scanVisit(&fakeRow{values: vals})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a == b || a.ID == b.ID {
-		t.Error("expected distinct instances and id pointers")
+	if a == b {
+		t.Fatal("expected distinct instances")
+	}
+	if *a.GetID() != *b.GetID() || a.GetDescription() != b.GetDescription() || !a.GetDate().Equal(*b.GetDate()) {
+		t.Error("same row should map identically")
+	}
+	a.SetDescription("changed")
+	if b.GetDescription() != "rabies shot" {
+		t.Error("instances share state")
 	}
 }
 
-func TestJoinedPetColumns(t *testing.T) {
-	want := []string{"pets.id AS pets_id", "pets.name", "pets.birth_date", "pets.type_id", "pets.owner_id"}
-	cols := strings.Split(joinedPetColumns, ",")
-	if len(cols) != len(want) {
-		t.Fatalf("got %d columns, want %d", len(cols), len(want))
-	}
-	for i, c := range cols {
-		if strings.TrimSpace(c) != want[i] {
-			t.Errorf("column %d = %q, want %q", i, strings.TrimSpace(c), want[i])
+func TestVisitColumnsLabels(t *testing.T) {
+	for _, want := range []string{"AS visit_id", "visit_date", "description"} {
+		if !strings.Contains(visitColumns, want) {
+			t.Errorf("visitColumns missing %q", want)
 		}
+	}
+	if strings.Index(visitColumns, "visit_id") > strings.Index(visitColumns, "visit_date") ||
+		strings.Index(visitColumns, "visit_date") > strings.Index(visitColumns, "description") {
+		t.Error("visitColumns order does not match scanVisit")
+	}
+}
+
+func TestMapPetRow(t *testing.T) {
+	tests := []struct {
+		name      string
+		row       *fakeRow
+		wantErr   bool
+		wantID    int
+		wantType  int
+		wantOwner int
+	}{
+		{name: "full row", row: &fakeRow{values: []any{int64(5), "Leo", "2010-09-07", int64(1), int64(2)}}, wantID: 5, wantType: 1, wantOwner: 2},
+		{name: "NULL fks map to zero", row: &fakeRow{values: []any{int64(6), nil, "2010-09-07", nil, nil}}, wantID: 6},
+		{name: "scan error", row: &fakeRow{scanErr: errFakeScan}, wantErr: true},
+		{name: "bad date", row: &fakeRow{values: []any{int64(6), "x", "bad", nil, nil}}, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := mapPetRow(tc.row)
+			if tc.wantErr {
+				if err == nil || p != nil {
+					t.Fatalf("expected error, got %v %v", p, err)
+				}
+				if tc.row.scanErr != nil && !errors.Is(err, tc.row.scanErr) {
+					t.Errorf("error not wrapped: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if id := p.GetID(); id == nil || *id != tc.wantID {
+				t.Errorf("id = %v, want %d", id, tc.wantID)
+			}
+			if p.TypeID() != tc.wantType || p.OwnerIDValue() != tc.wantOwner {
+				t.Errorf("fks = %d/%d, want %d/%d", p.TypeID(), p.OwnerIDValue(), tc.wantType, tc.wantOwner)
+			}
+		})
 	}
 }
