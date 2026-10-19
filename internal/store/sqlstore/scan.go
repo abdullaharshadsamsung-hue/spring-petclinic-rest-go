@@ -53,10 +53,13 @@ func (p *jdbcPet) OwnerIDValue() int { return p.ownerID }
 // mapPetRow maps the current row of a pets query (pets_id, name, birth_date,
 // type_id, owner_id, in that order) into a new jdbcPet. It sets the id,
 // name, birth date, type id and owner id. The Type and Owner associations
-// stay unset, and the calling repository resolves them (see resolveType).
+// stay unset, and the calling repository resolves them.
 //
 // MIGRATION_NOTE: Go port of JdbcPetRowMapper. A NULL type_id or owner_id
-// maps to 0, which matches the source's rs.getInt behavior.
+// maps to 0, which matches the source's rs.getInt behavior. BaseEntity.SetID
+// takes *int (nil means "new, not yet persisted"), so the scanned id is
+// passed by address; id is a fresh local per call, so the pointer is never
+// shared between entities.
 func mapPetRow(rs rowScanner) (*jdbcPet, error) {
 	var (
 		id        int
@@ -70,7 +73,7 @@ func mapPetRow(rs rowScanner) (*jdbcPet, error) {
 	}
 
 	p := &jdbcPet{}
-	p.SetID(id)
+	p.SetID(&id)
 	p.SetName(name.String)
 	p.SetBirthDate(birthDate)
 	p.SetTypeID(int(typeID.Int64))
@@ -87,13 +90,22 @@ func mapPetRow(rs rowScanner) (*jdbcPet, error) {
 // MIGRATION_NOTE: Go port of JdbcVisitRowMapper. Spring's RowMapper reads
 // columns by label. database/sql scans by position, so the column order is
 // fixed by visitColumns, and every query that uses scanVisit must select
-// visitColumns. rs.getObject("visit_date", LocalDate.class) becomes a scan
-// into model.Date, which implements sql.Scanner. A NULL description becomes
-// "", because Go strings are not nullable.
+// visitColumns.
+//
+// rs.getObject("visit_date", LocalDate.class) returns null for a NULL
+// column, and the source then calls setDate(null), overriding the
+// constructor's default date. To keep that behavior the date is scanned into
+// a *model.Date: database/sql sets the pointer to nil for NULL, and for a
+// non-NULL value allocates a model.Date and delegates to its sql.Scanner
+// implementation. Visit.SetDate takes *Date, so the pointer is passed
+// straight through. Scanning directly into model.Date would fail on NULL,
+// because Date.Scan rejects nil.
+//
+// A NULL description becomes "", because the model uses a plain string.
 func scanVisit(rs rowScanner) (*model.Visit, error) {
 	var (
 		id          int
-		date        model.Date
+		date        *model.Date
 		description sql.NullString
 	)
 	if err := rs.Scan(&id, &date, &description); err != nil {
@@ -101,7 +113,7 @@ func scanVisit(rs rowScanner) (*model.Visit, error) {
 	}
 
 	v := model.NewVisit()
-	v.SetID(id)
+	v.SetID(&id)
 	v.SetDate(date)
 	v.SetDescription(description.String)
 	return v, nil
