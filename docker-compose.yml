@@ -2,14 +2,18 @@ services:
   app:
     build: .
     ports:
-      - "9966:9966"
+      - "8080:8080"
     environment:
-      PETCLINIC_PORT: "9966"
-      PETCLINIC_DB: "postgres"
-      POSTGRES_URL: "postgres://postgres:5432/app?sslmode=disable"
-      POSTGRES_USER: "app"
-      POSTGRES_PASS: "app"
       DATABASE_URL: "postgres://app:app@postgres:5432/app?sslmode=disable"
+      DB_HOST: "postgres"
+      DB_NAME: "app"
+      DB_PASSWORD: "app"
+      DB_PORT: "5432"
+      DB_USER: "app"
+      DB_USERNAME: "app"
+      JWT_SECRET: "test-secret"
+      PORT: "8080"
+      POSTGRES_URL: "postgres://app:app@postgres:5432/app?sslmode=disable"
     depends_on:
       postgres:
         condition: service_healthy
