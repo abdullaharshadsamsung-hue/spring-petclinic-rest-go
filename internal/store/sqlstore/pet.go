@@ -111,12 +111,15 @@ func (r *PetRepository) Save(ctx context.Context, pet *model.Pet) error {
 // without the owner's pets) attached. Visits are not loaded, matching the
 // source JDBC implementation.
 func (r *PetRepository) FindAll(ctx context.Context) ([]*model.Pet, error) {
-	pets, err := r.queryPets(ctx, "SELECT "+joinedPetColumns+" FROM pets")
+	pets, err := r.queryPets(ctx, "SELECT "+joinedPetColumns+" FROM pets ORDER BY pets.id")
 	if err != nil {
 		return nil, fmt.Errorf("find all pets: %w", err)
 	}
 	result, err := r.attachTypesAndOwners(ctx, pets)
 	if err != nil {
+		return nil, fmt.Errorf("find all pets: %w", err)
+	}
+	if err := r.loadVisits(ctx, result); err != nil {
 		return nil, fmt.Errorf("find all pets: %w", err)
 	}
 	return result, nil
