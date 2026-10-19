@@ -144,7 +144,9 @@ func buildRouter() http.Handler {
 	// Security is disabled by default (petclinic.security.enable=false), so
 	// no Authorizer is installed.
 	api.NewPetTypeHandler(clinic, nil).Register(mux, ctxPath)
+	api.NewSpecialtyHandler(clinic, nil).Register(mux, ctxPath)
 	api.NewOwnerHandler(clinic, nil).Register(mux, ctxPath)
+	api.NewOwnerV2Handler(clinic, nil).Register(mux, ctxPath)
 	api.NewPetHandler(clinic, nil).Register(mux, ctxPath)
 	api.NewPetV2Handler(clinic, nil).Register(mux, ctxPath)
 	api.NewVetHandler(clinic, nil).Register(mux, ctxPath)
