@@ -30,6 +30,7 @@ type clinicAdapter struct {
 	petTypes    *sqlstore.PetTypeRepository
 	specialties *sqlstore.SpecialtyRepository
 	visits      *sqlstore.VisitRepository
+	vets        *sqlstore.VetRepository
 }
 
 func (c *clinicAdapter) FindAllPetTypes(ctx context.Context) ([]*model.PetType, error) {
@@ -66,6 +67,26 @@ func (c *clinicAdapter) SaveSpecialty(ctx context.Context, s *model.Specialty) e
 
 func (c *clinicAdapter) DeleteSpecialty(ctx context.Context, s *model.Specialty) error {
 	return c.specialties.Delete(ctx, s)
+}
+
+func (c *clinicAdapter) FindVetByID(ctx context.Context, id int) (*model.Vet, error) {
+	return c.vets.FindByID(ctx, id)
+}
+
+func (c *clinicAdapter) FindAllVets(ctx context.Context) ([]*model.Vet, error) {
+	return c.vets.FindAll(ctx)
+}
+
+func (c *clinicAdapter) FindVets(ctx context.Context) ([]*model.Vet, error) {
+	return c.vets.FindAll(ctx)
+}
+
+func (c *clinicAdapter) SaveVet(ctx context.Context, v *model.Vet) error {
+	return c.vets.Save(ctx, v)
+}
+
+func (c *clinicAdapter) DeleteVet(ctx context.Context, v *model.Vet) error {
+	return c.vets.Delete(ctx, v)
 }
 
 func (c *clinicAdapter) SaveVisit(ctx context.Context, v *model.Visit) error {
@@ -128,12 +149,16 @@ func buildRouter() http.Handler {
 	if err != nil {
 		log.Fatal().Err(err).Msg("opening database")
 	}
+	if err := initSchema(db); err != nil {
+		log.Fatal().Err(err).Msg("initialising database schema")
+	}
 
 	visitRepo := sqlstore.NewVisitRepository(db)
 	clinic := &clinicAdapter{
 		petTypes:    sqlstore.NewPetTypeRepository(db),
 		specialties: sqlstore.NewSpecialtyRepository(db),
 		visits:      visitRepo,
+		vets:        sqlstore.NewVetRepository(db),
 	}
 	users := service.NewUserService(sqlstore.NewUserRepository(db))
 
