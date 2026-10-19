@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -254,14 +255,18 @@ func disabledSecurity(next http.Handler) http.Handler {
 }
 
 func buildRouter() http.Handler {
-	cfg, err := config.Load(os.Args[1:])
+	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal().Err(err).Msg("loading config")
 	}
-	if cfg.DBDriver != config.DriverPostgres {
-		log.Warn().Str("driver", cfg.DBDriver).Msg("only postgres is supported by this server; set DATABASE_URL or POSTGRES_URL")
+	dsn := cfg.DatabaseURL
+	if dsn == "" {
+		dsn = os.Getenv("POSTGRES_URL")
 	}
-	db, err := sql.Open("postgres", cfg.DSN)
+	if dsn == "" {
+		log.Fatal().Msg("DATABASE_URL (or POSTGRES_URL) must be set")
+	}
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		log.Fatal().Err(err).Msg("opening database")
 	}
