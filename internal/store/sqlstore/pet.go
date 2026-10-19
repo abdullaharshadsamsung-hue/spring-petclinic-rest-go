@@ -111,7 +111,8 @@ func (r *PetRepository) Save(ctx context.Context, pet *model.Pet) error {
 // without the owner's pets) attached. Visits are not loaded, matching the
 // source JDBC implementation.
 func (r *PetRepository) FindAll(ctx context.Context) ([]*model.Pet, error) {
-	pets, err := r.queryPets(ctx, "SELECT "+joinedPetColumns+" FROM pets")
+	pets, err := r.queryPetsWithVisits(ctx,
+		"SELECT "+petVisitColumns+" FROM pets LEFT OUTER JOIN visits ON pets.id = visits.pet_id ORDER BY pets.id, visits.id")
 	if err != nil {
 		return nil, fmt.Errorf("find all pets: %w", err)
 	}
@@ -125,8 +126,9 @@ func (r *PetRepository) FindAll(ctx context.Context) ([]*model.Pet, error) {
 // FindAllPage returns one page of pets ordered by id, with type and owner
 // attached, together with the total pet count.
 func (r *PetRepository) FindAllPage(ctx context.Context, req store.PageRequest) (store.Page[*model.Pet], error) {
-	pets, err := r.queryPets(ctx,
-		"SELECT "+joinedPetColumns+" FROM pets ORDER BY pets.id LIMIT $1 OFFSET $2",
+	pets, err := r.queryPetsWithVisits(ctx,
+		"SELECT "+petVisitColumns+" FROM (SELECT * FROM pets ORDER BY id LIMIT $1 OFFSET $2) pets"+
+			" LEFT OUTER JOIN visits ON pets.id = visits.pet_id ORDER BY pets.id, visits.id",
 		req.Size, req.Offset())
 	if err != nil {
 		return store.Page[*model.Pet]{}, fmt.Errorf("find pets page: %w", err)
@@ -198,6 +200,24 @@ func (r *PetRepository) queryPets(ctx context.Context, query string, args ...any
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate pets: %w", err)
+	}
+	return pets, nil
+}
+
+// queryPetsWithVisits runs a query selecting petVisitColumns (rows of one pet
+// consecutive) and returns the pets with their visits attached.
+func (r *PetRepository) queryPetsWithVisits(ctx context.Context, query string, args ...any) ([]*jdbcPet, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query pets and visits: %w", err)
+	}
+	pets, err := extractPetsWithVisits(rows)
+	closeErr := rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close pets and visits rows: %w", closeErr)
 	}
 	return pets, nil
 }
