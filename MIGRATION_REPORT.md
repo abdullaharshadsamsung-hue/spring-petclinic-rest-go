@@ -1,15 +1,15 @@
 ## Migration Report
 
-**Recommendation:** REVIEW RECOMMENDED (based on model self-assessment only; nothing was executed against the migrated code)
+**Recommendation:** REVIEW RECOMMENDED (based on target unit tests only; behavior was not compared)
 **Build:** passed
 **Behavior vs original:** not verified — not run
-**Target unit tests:** not run — not run
+**Target unit tests:** 187/187 passing
 **Source test baseline:** 41/237 passing
 **Modules migrated:** 58/82
-**Model self-assessed confidence:** 81%
+**Model self-assessed confidence:** 90%
 
 ### Summary
-58 of 82 modules translated. 24 modules skipped (unmigrable): `src/main/java/org/springframework/samples/petclinic/util/CallMonitoringAspect.java`, `src/main/java/org/springframework/samples/petclinic/rest/controller/BindingErrorsResponse.java`, `src/main/java/org/springframework/samples/petclinic/repository/springdatajpa/PetTypeRepositoryOverride.java` and 21 more. Build: passed. Target unit tests: not run (not run). Source test baseline: 41/237 passing. Behavior vs original: not verified (not run). 5 module(s) required human revision feedback (5 revision round(s) total). 37 modules are below confidence threshold and need review. Model self-assessed confidence: 81%.
+58 of 82 modules translated. 24 modules skipped (unmigrable): `src/main/java/org/springframework/samples/petclinic/util/CallMonitoringAspect.java`, `src/main/java/org/springframework/samples/petclinic/rest/controller/BindingErrorsResponse.java`, `src/main/java/org/springframework/samples/petclinic/repository/springdatajpa/PetTypeRepositoryOverride.java` and 21 more. Build: passed. Target unit tests: 187/187 passing. Source test baseline: 41/237 passing. Behavior vs original: not verified (not run). 5 module(s) required human revision feedback (5 revision round(s) total). 37 modules are below confidence threshold and need review. Model self-assessed confidence: 90%.
 
 ### Automated fixes applied
 - `internal/api/mapping.go` (+311/-0): revision for critical validator findings
@@ -17,6 +17,7 @@
 - `internal/api/mapping.go` (+125/-188): revision for critical validator findings
 - `internal/api/mapping.go` (+113/-127): revision for critical validator findings
 - `go.mod` (+13/-146): compiler errors
+- `internal/store/sqlstore/entity_lookup.go` (+117/-0): target test failures
 
 ### Agent notes (unverified)
 Unit tests re-run on request.
