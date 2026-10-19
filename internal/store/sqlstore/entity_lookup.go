@@ -42,6 +42,20 @@ type identifiable interface {
 	GetID() *int
 }
 
+// isNilEntity reports whether e is a nil interface or a typed nil pointer.
+// Calling a promoted GetID on a nil struct pointer would panic.
+func isNilEntity(e any) bool {
+	if e == nil {
+		return true
+	}
+	v := reflect.ValueOf(e)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice:
+		return v.IsNil()
+	}
+	return false
+}
+
 // typeName returns the name of T for error messages.
 func typeName[T any]() string {
 	return reflect.TypeOf((*T)(nil)).Elem().String()
@@ -57,6 +71,9 @@ func typeName[T any]() string {
 func indexByID[T identifiable](entities []T) map[int]T {
 	index := make(map[int]T, len(entities))
 	for _, e := range entities {
+		if isNilEntity(e) {
+			continue
+		}
 		id := e.GetID()
 		if id == nil {
 			continue
@@ -88,6 +105,9 @@ func lookupByID[T identifiable](index map[int]T, id int) (T, error) {
 // (Java would have thrown a NullPointerException while unboxing).
 func byID[T identifiable](entities []T, id int) (T, error) {
 	for _, e := range entities {
+		if isNilEntity(e) {
+			continue
+		}
 		if eid := e.GetID(); eid != nil && *eid == id {
 			return e, nil
 		}
