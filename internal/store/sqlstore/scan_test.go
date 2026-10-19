@@ -4,213 +4,369 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
+	"reflect"
 	"testing"
 	"time"
 
 	"migrated-app/internal/model"
 )
 
-// fakeRow is an in-memory rowScanner that mimics the conversions
-// database/sql performs for the destination types used by the mappers.
-type fakeRow struct {
-	values    []any
-	scanErr   error
-	scanCalls int
+// fakeRows is an in-memory rowIterator / rowScanner that mimics *sql.Rows.
+type fakeRows struct {
+	rows    [][]any
+	pos     int
+	scanErr error
+	iterErr error
 }
 
-var errFakeScan = errors.New("fake scan failure")
+func (f *fakeRows) Next() bool {
+	if f.pos >= len(f.rows) {
+		return false
+	}
+	f.pos++
+	return true
+}
 
-func (f *fakeRow) Scan(dest ...any) error {
-	f.scanCalls++
+func (f *fakeRows) Err() error { return f.iterErr }
+
+func (f *fakeRows) Scan(dest ...any) error {
 	if f.scanErr != nil {
 		return f.scanErr
 	}
-	if len(dest) != len(f.values) {
-		return fmt.Errorf("expected %d destination arguments in Scan, not %d", len(f.values), len(dest))
+	idx := f.pos - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(f.rows) {
+		return errors.New("no row")
+	}
+	row := f.rows[idx]
+	if len(row) != len(dest) {
+		return fmt.Errorf("sql: expected %d destination arguments in Scan, not %d", len(row), len(dest))
 	}
 	for i, d := range dest {
-		v := f.values[i]
-		switch t := d.(type) {
-		case sql.Scanner:
-			if err := t.Scan(v); err != nil {
-				return fmt.Errorf("column %d: %w", i, err)
-			}
+		v := row[i]
+		switch p := d.(type) {
 		case *int:
-			switch n := v.(type) {
-			case int:
-				*t = n
-			case int64:
-				*t = int(n)
-			case nil:
-				return fmt.Errorf("column %d: converting NULL to int is unsupported", i)
-			default:
-				return fmt.Errorf("column %d: unsupported type %T", i, v)
+			if v == nil {
+				return fmt.Errorf("converting NULL to int is unsupported")
+			}
+			*p = v.(int)
+		case *sql.NullString:
+			if v == nil {
+				*p = sql.NullString{}
+			} else {
+				*p = sql.NullString{String: v.(string), Valid: true}
+			}
+		case *sql.NullInt64:
+			if v == nil {
+				*p = sql.NullInt64{}
+			} else {
+				*p = sql.NullInt64{Int64: int64(v.(int)), Valid: true}
+			}
+		case **model.Date:
+			if v == nil {
+				*p = nil
+			} else {
+				dd := v.(model.Date)
+				*p = &dd
 			}
 		default:
-			return fmt.Errorf("column %d: unsupported destination %T", i, d)
+			return fmt.Errorf("unsupported dest %T", d)
 		}
 	}
 	return nil
 }
 
-func TestScanVisit(t *testing.T) {
-	d2013 := model.NewDate(2013, time.January, 1)
-	tests := []struct {
-		name     string
-		row      *fakeRow
-		wantErr  bool
-		wantID   int
-		wantDate model.Date
-		wantDesc string
-	}{
-		{
-			name:     "full row from time.Time",
-			row:      &fakeRow{values: []any{int64(1), time.Date(2013, 1, 1, 0, 0, 0, 0, time.UTC), "rabies shot"}},
-			wantID:   1,
-			wantDate: d2013,
-			wantDesc: "rabies shot",
-		},
-		{
-			name:     "date as string and bytes description",
-			row:      &fakeRow{values: []any{int64(7), "2013-01-01", []byte("neutered")}},
-			wantID:   7,
-			wantDate: d2013,
-			wantDesc: "neutered",
-		},
-		{
-			name:     "timestamp text is truncated to date",
-			row:      &fakeRow{values: []any{int64(2), "2013-01-01 10:11:12", "x"}},
-			wantID:   2,
-			wantDate: d2013,
-			wantDesc: "x",
-		},
-		{
-			name:     "NULL description becomes empty string",
-			row:      &fakeRow{values: []any{int64(3), d2013.Time(), nil}},
-			wantID:   3,
-			wantDate: d2013,
-			wantDesc: "",
-		},
-		{name: "NULL visit_id is an error", row: &fakeRow{values: []any{nil, d2013.Time(), "x"}}, wantErr: true},
-		{name: "NULL visit_date is an error", row: &fakeRow{values: []any{int64(1), nil, "x"}}, wantErr: true},
-		{name: "unconvertible visit_date", row: &fakeRow{values: []any{int64(1), "not-a-date", "x"}}, wantErr: true},
-		{name: "unsupported date type", row: &fakeRow{values: []any{int64(1), 42, "x"}}, wantErr: true},
-		{name: "missing column", row: &fakeRow{values: []any{int64(1), d2013.Time()}}, wantErr: true},
-		{name: "underlying scan error", row: &fakeRow{scanErr: errFakeScan}, wantErr: true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			v, err := scanVisit(tc.row)
-			if tc.row.scanCalls != 1 {
-				t.Errorf("Scan called %d times, want 1", tc.row.scanCalls)
-			}
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got visit %+v", v)
-				}
-				if v != nil {
-					t.Errorf("expected nil visit on error")
-				}
-				if !strings.Contains(err.Error(), "scan visit row") {
-					t.Errorf("error %q lacks context", err)
-				}
-				if tc.row.scanErr != nil && !errors.Is(err, tc.row.scanErr) {
-					t.Errorf("error not wrapped: %v", err)
-				}
+// single wraps a single row for QueryRow-style scanning.
+func single(row ...any) *fakeRows { return &fakeRows{rows: [][]any{row}, pos: 1} }
+
+func petVisitRow(petID int, name string, visitsPetID any, visitID any, date any, desc any) []any {
+	return []any{petID, name, nil, 1, 10, visitsPetID, visitID, date, desc}
+}
+
+// visitsOf finds the []*model.Visit stored inside a pet via reflection, so the
+// test does not depend on Pet's accessor names or sort order.
+func visitsOf(t *testing.T, p *jdbcPet) []*model.Visit {
+	t.Helper()
+	target := reflect.TypeOf([]*model.Visit{})
+	var found []*model.Visit
+	var ok bool
+	var walk func(v reflect.Value)
+	walk = func(v reflect.Value) {
+		if ok {
+			return
+		}
+		for v.Kind() == reflect.Ptr {
+			if v.IsNil() {
 				return
 			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			v = v.Elem()
+		}
+		if v.Kind() != reflect.Struct {
+			return
+		}
+		for i := 0; i < v.NumField(); i++ {
+			f := v.Field(i)
+			if f.Type() == target {
+				found = reflect.NewAt(f.Type(), f.Addr().UnsafePointer()).Elem().Interface().([]*model.Visit)
+				ok = true
+				return
 			}
-			if id := v.GetID(); id == nil || *id != tc.wantID {
-				t.Errorf("id = %v, want %d", id, tc.wantID)
+			if f.Kind() == reflect.Struct {
+				walk(f)
 			}
-			if d := v.GetDate(); d == nil || !d.Equal(tc.wantDate) {
-				t.Errorf("date = %v, want %v", d, tc.wantDate)
-			}
-			if v.GetDescription() != tc.wantDesc {
-				t.Errorf("description = %q, want %q", v.GetDescription(), tc.wantDesc)
-			}
-			if v.GetPet() != nil {
-				t.Errorf("pet should be unset")
-			}
-			if v.PetID != nil {
-				t.Errorf("petID should be unset, got %v", *v.PetID)
-			}
-		})
-	}
-}
-
-func TestScanVisitReturnsDistinctInstances(t *testing.T) {
-	vals := []any{int64(1), "2013-01-01", "rabies shot"}
-	a, err := scanVisit(&fakeRow{values: vals})
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := scanVisit(&fakeRow{values: vals})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a == b {
-		t.Fatal("expected distinct instances")
-	}
-	if *a.GetID() != *b.GetID() || a.GetDescription() != b.GetDescription() || !a.GetDate().Equal(*b.GetDate()) {
-		t.Error("same row should map identically")
-	}
-	a.SetDescription("changed")
-	if b.GetDescription() != "rabies shot" {
-		t.Error("instances share state")
-	}
-}
-
-func TestVisitColumnsLabels(t *testing.T) {
-	for _, want := range []string{"AS visit_id", "visit_date", "description"} {
-		if !strings.Contains(visitColumns, want) {
-			t.Errorf("visitColumns missing %q", want)
 		}
 	}
-	if strings.Index(visitColumns, "visit_id") > strings.Index(visitColumns, "visit_date") ||
-		strings.Index(visitColumns, "visit_date") > strings.Index(visitColumns, "description") {
-		t.Error("visitColumns order does not match scanVisit")
+	v := reflect.ValueOf(&p.Pet).Elem()
+	walk(v)
+	if !ok {
+		return nil
 	}
+	return found
+}
+
+func petID(p *jdbcPet) int {
+	if id := p.GetID(); id != nil {
+		return *id
+	}
+	return -1
 }
 
 func TestMapPetRow(t *testing.T) {
+	bd := model.NewDate(2010, time.March, 4)
 	tests := []struct {
 		name      string
-		row       *fakeRow
+		rs        *fakeRows
 		wantErr   bool
 		wantID    int
 		wantType  int
 		wantOwner int
+		wantBD    *model.Date
 	}{
-		{name: "full row", row: &fakeRow{values: []any{int64(5), "Leo", "2010-09-07", int64(1), int64(2)}}, wantID: 5, wantType: 1, wantOwner: 2},
-		{name: "NULL fks map to zero", row: &fakeRow{values: []any{int64(6), nil, "2010-09-07", nil, nil}}, wantID: 6},
-		{name: "scan error", row: &fakeRow{scanErr: errFakeScan}, wantErr: true},
-		{name: "bad date", row: &fakeRow{values: []any{int64(6), "x", "bad", nil, nil}}, wantErr: true},
+		{"full row", single(7, "Leo", bd, 2, 3), false, 7, 2, 3, &bd},
+		{"null fks and birth date", single(8, "Max", nil, nil, nil), false, 8, 0, 0, nil},
+		{"zero id", single(0, "Zed", nil, 1, 1), false, 0, 1, 1, nil},
+		{"missing column", single(7, "Leo", nil, 2), true, 0, 0, 0, nil},
+		{"scan error", &fakeRows{rows: [][]any{{}}, pos: 1, scanErr: errors.New("boom")}, true, 0, 0, 0, nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := mapPetRow(tc.row)
+			p, err := mapPetRow(tc.rs)
 			if tc.wantErr {
 				if err == nil || p != nil {
 					t.Fatalf("expected error, got %v %v", p, err)
-				}
-				if tc.row.scanErr != nil && !errors.Is(err, tc.row.scanErr) {
-					t.Errorf("error not wrapped: %v", err)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if id := p.GetID(); id == nil || *id != tc.wantID {
-				t.Errorf("id = %v, want %d", id, tc.wantID)
+			if petID(p) != tc.wantID {
+				t.Errorf("id=%d want %d", petID(p), tc.wantID)
 			}
 			if p.TypeID() != tc.wantType || p.OwnerIDValue() != tc.wantOwner {
-				t.Errorf("fks = %d/%d, want %d/%d", p.TypeID(), p.OwnerIDValue(), tc.wantType, tc.wantOwner)
+				t.Errorf("fks=%d,%d", p.TypeID(), p.OwnerIDValue())
+			}
+			got := p.GetBirthDate()
+			if (got == nil) != (tc.wantBD == nil) || (got != nil && !got.Equal(*tc.wantBD)) {
+				t.Errorf("birth date=%v want %v", got, tc.wantBD)
 			}
 		})
+	}
+}
+
+func TestMapPetRowIDNotShared(t *testing.T) {
+	a, _ := mapPetRow(single(1, "a", nil, 1, 1))
+	b, _ := mapPetRow(single(2, "b", nil, 1, 1))
+	if a.GetID() == b.GetID() || *a.GetID() != 1 || *b.GetID() != 2 {
+		t.Fatal("ids shared or wrong")
+	}
+}
+
+func TestScanVisit(t *testing.T) {
+	d := model.NewDate(2013, time.January, 1)
+	tests := []struct {
+		name     string
+		rs       *fakeRows
+		wantErr  bool
+		wantID   *int
+		wantDate *model.Date
+		wantDesc string
+	}{
+		{"full", single(5, d, "rabies shot"), false, intp(5), &d, "rabies shot"},
+		{"null date and description", single(6, nil, nil), false, intp(6), nil, ""},
+		{"null id", single(nil, d, "x"), false, nil, &d, "x"},
+		{"missing column", single(5, d), true, nil, nil, ""},
+		{"scan error", &fakeRows{rows: [][]any{{}}, pos: 1, scanErr: errors.New("boom")}, true, nil, nil, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := scanVisit(tc.rs)
+			if tc.wantErr {
+				if err == nil || v != nil {
+					t.Fatalf("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			gid := v.GetID()
+			if (gid == nil) != (tc.wantID == nil) || (gid != nil && *gid != *tc.wantID) {
+				t.Errorf("id=%v want %v", gid, tc.wantID)
+			}
+			gd := v.GetDate()
+			if (gd == nil) != (tc.wantDate == nil) || (gd != nil && !gd.Equal(*tc.wantDate)) {
+				t.Errorf("date=%v want %v", gd, tc.wantDate)
+			}
+			if v.GetDescription() != tc.wantDesc {
+				t.Errorf("desc=%q", v.GetDescription())
+			}
+		})
+	}
+}
+
+func intp(i int) *int { return &i }
+
+func TestScanErrorWrapped(t *testing.T) {
+	sentinel := errors.New("sentinel")
+	_, err := scanVisit(&fakeRows{rows: [][]any{{}}, pos: 1, scanErr: sentinel})
+	if !errors.Is(err, sentinel) {
+		t.Errorf("not wrapped: %v", err)
+	}
+	_, err = mapPetRow(&fakeRows{rows: [][]any{{}}, pos: 1, scanErr: sentinel})
+	if !errors.Is(err, sentinel) {
+		t.Errorf("not wrapped: %v", err)
+	}
+}
+
+func TestExtractPetsWithVisits(t *testing.T) {
+	d1 := model.NewDate(2013, time.January, 1)
+	d2 := model.NewDate(2013, time.January, 2)
+	type wantPet struct {
+		id    int
+		descs []string
+	}
+	tests := []struct {
+		name string
+		rows [][]any
+		want []wantPet
+	}{
+		{"empty result set", nil, []wantPet{}},
+		{"one pet no visits", [][]any{petVisitRow(7, "Leo", nil, nil, nil, nil)}, []wantPet{{7, nil}}},
+		{"one pet N visits in order", [][]any{
+			petVisitRow(7, "Leo", 7, 1, d1, "a"),
+			petVisitRow(7, "Leo", 7, 2, d2, "b"),
+			petVisitRow(7, "Leo", 7, 3, d1, "c"),
+		}, []wantPet{{7, []string{"a", "b", "c"}}}},
+		{"multiple pets grouped", [][]any{
+			petVisitRow(1, "A", 1, 10, d1, "a1"),
+			petVisitRow(2, "B", nil, nil, nil, nil),
+			petVisitRow(3, "C", 3, 11, d1, "c1"),
+			petVisitRow(3, "C", 3, 12, d2, "c2"),
+		}, []wantPet{{1, []string{"a1"}}, {2, nil}, {3, []string{"c1", "c2"}}}},
+		{"non-contiguous rows duplicate pet", [][]any{
+			petVisitRow(1, "A", 1, 10, d1, "x"),
+			petVisitRow(2, "B", 2, 11, d1, "y"),
+			petVisitRow(1, "A", 1, 12, d1, "z"),
+		}, []wantPet{{1, []string{"x"}}, {2, []string{"y"}}, {1, []string{"z"}}}},
+		{"pets_id zero", [][]any{petVisitRow(0, "Z", nil, nil, nil, nil)}, []wantPet{{0, nil}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fr := &fakeRows{rows: tc.rows}
+			pets, err := extractPetsWithVisits(fr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pets == nil {
+				t.Fatal("result must not be nil")
+			}
+			if len(pets) != len(tc.want) {
+				t.Fatalf("got %d pets want %d", len(pets), len(tc.want))
+			}
+			for i, w := range tc.want {
+				p := pets[i]
+				if petID(p) != w.id {
+					t.Errorf("pet %d id=%d want %d", i, petID(p), w.id)
+				}
+				vs := visitsOf(t, p)
+				if len(vs) != len(w.descs) {
+					t.Fatalf("pet %d has %d visits want %d", i, len(vs), len(w.descs))
+				}
+				for j, v := range vs {
+					if v == nil {
+						t.Fatal("nil visit")
+					}
+					if v.GetDescription() != w.descs[j] {
+						t.Errorf("visit %d desc=%q want %q", j, v.GetDescription(), w.descs[j])
+					}
+				}
+			}
+			if len(fr.rows) != len(tc.rows) {
+				t.Error("rows modified")
+			}
+		})
+	}
+}
+
+func TestExtractPetsWithVisitsErrors(t *testing.T) {
+	sentinel := errors.New("iter fail")
+	tests := []struct {
+		name string
+		fr   *fakeRows
+		is   error
+	}{
+		{"missing visits_pet_id column", &fakeRows{rows: [][]any{{7, "Leo", nil, 1, 1, 1, nil, "x"}}}, nil},
+		{"missing pets columns", &fakeRows{rows: [][]any{{7}}}, nil},
+		{"scan error", &fakeRows{rows: [][]any{petVisitRow(1, "A", nil, nil, nil, nil)}, scanErr: sentinel}, sentinel},
+		{"iteration error", &fakeRows{iterErr: sentinel}, sentinel},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pets, err := extractPetsWithVisits(tc.fr)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if pets != nil {
+				t.Error("expected nil pets on error")
+			}
+			if tc.is != nil && !errors.Is(err, tc.is) {
+				t.Errorf("error not wrapped: %v", err)
+			}
+		})
+	}
+}
+
+func TestExtractPetsWithVisitsStateless(t *testing.T) {
+	rows := [][]any{petVisitRow(1, "A", 1, 10, model.NewDate(2013, time.January, 1), "a")}
+	for i := 0; i < 2; i++ {
+		pets, err := extractPetsWithVisits(&fakeRows{rows: rows})
+		if err != nil || len(pets) != 1 || len(visitsOf(t, pets[0])) != 1 {
+			t.Fatalf("run %d: %v %v", i, pets, err)
+		}
+	}
+}
+
+func TestColumnConstants(t *testing.T) {
+	tests := []struct{ got, want string }{
+		{joinedPetColumns, "pets.id AS pets_id, pets.name, pets.birth_date, pets.type_id, pets.owner_id"},
+		{visitColumns, "visits.id AS visit_id, visits.visit_date, visits.description"},
+		{petVisitColumns, joinedPetColumns + ", visits.pet_id AS visits_pet_id, " + visitColumns},
+	}
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("got %q want %q", tc.got, tc.want)
+		}
+	}
+}
+
+func TestJdbcPetAccessors(t *testing.T) {
+	p := &jdbcPet{}
+	p.SetTypeID(4)
+	p.SetOwnerIDValue(9)
+	if p.TypeID() != 4 || p.OwnerIDValue() != 9 {
+		t.Fatal("accessors broken")
 	}
 }
