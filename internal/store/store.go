@@ -1,175 +1,210 @@
-// Package store defines the persistence ports (repository interfaces) of the
-// PetClinic service. Concrete implementations live in sub-packages such as
-// sqlstore (database/sql on PostgreSQL).
+// Package store defines the persistence contracts of the petclinic service:
+// the repository interfaces, the pagination value types and the sentinel
+// errors that every concrete implementation (see internal/store/sqlstore)
+// must honour.
 //
-// MIGRATION_NOTE: In the source, several implementations (jdbc, jpa,
-// spring-data-jpa) were selected at runtime through Spring @Profile. The Go
-// port follows the agreed plan (default spring-data-jpa semantics) and ships
-// a single database/sql implementation; the interfaces remain so services
-// can be tested against fakes.
+// MIGRATION_NOTE: In the source project these interfaces had several
+// implementations (JDBC, JPA, Spring Data JPA) selected by Spring profile.
+// The agreed plan keeps a single database/sql implementation (PostgreSQL,
+// $n placeholders, INSERT ... RETURNING id) that follows the default
+// spring-data-jpa semantics. Spring's unchecked DataAccessException hierarchy
+// becomes ordinary Go errors. Use errors.Is with ErrNotFound and ErrIntegrity
+// to tell those cases apart from other failures.
 package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"strings"
 
 	"migrated-app/internal/model"
 )
 
-// ErrNotFound is returned (possibly wrapped) by repository lookups when no
-// entity matches the requested key. Callers test for it with errors.Is.
-//
-// MIGRATION_NOTE: the source's spring-data-jpa repositories returned null for
-// a missing entity and the REST controllers translated null to 404. In Go a
-// missing entity is reported as an error matching ErrNotFound instead of a
-// nil pointer with a nil error.
-var ErrNotFound = errors.New("store: entity not found")
+// Error is the type of the sentinel errors exported by this package. It is a
+// string type so the sentinels can be declared as constants and cannot be
+// reassigned by other packages.
+type Error string
 
-// integrityError is the concrete type behind ErrIntegrity. It implements the
-// IntegrityViolation() marker method that the api package's error handler
-// looks for (api cannot be imported from here), so a wrapped ErrIntegrity is
-// rendered exactly like Spring's DataIntegrityViolationException.
-type integrityError struct{ msg string }
+// Error implements the error interface.
+func (e Error) Error() string { return string(e) }
 
-func (e *integrityError) Error() string { return e.msg }
+const (
+	// ErrNotFound is returned when a requested entity does not exist. It
+	// replaces Spring's DataRetrievalFailureException /
+	// ObjectRetrievalFailureException / EmptyResultDataAccessException.
+	ErrNotFound Error = "store: entity not found"
 
-// IntegrityViolation marks the error as a data integrity violation.
-func (e *integrityError) IntegrityViolation() bool { return true }
+	// ErrIntegrity is returned when a write violates a database constraint,
+	// such as a foreign key, unique or not-null constraint. It replaces
+	// Spring's DataIntegrityViolationException.
+	ErrIntegrity Error = "store: data integrity violation"
+)
 
-// ErrIntegrity is returned (wrapped) by repositories when a write violates a
-// data constraint, e.g. a foreign key referencing a missing row or a unique
-// constraint. It replaces Spring's DataIntegrityViolationException. Callers
-// test for it with errors.Is.
-var ErrIntegrity error = &integrityError{msg: "store: data integrity violation"}
-
-// PageRequest selects one page of a result set. It replaces Spring Data's
-// Pageable. Page is zero-based; Size is the maximum number of elements.
-type PageRequest struct {
-	// Page is the zero-based page index.
-	Page int
-	// Size is the page size; it must be at least 1.
-	Size int
+// IntegrityViolation wraps ErrIntegrity with a human-readable detail message
+// and, optionally, the underlying driver error. errors.Is(err, ErrIntegrity)
+// reports true for the result.
+func IntegrityViolation(detail string, cause error) error {
+	if cause == nil {
+		return fmt.Errorf("%w: %s", ErrIntegrity, detail)
+	}
+	return fmt.Errorf("%w: %s: %v", ErrIntegrity, detail, cause)
 }
 
-// NewPageRequest validates and returns a PageRequest, mirroring
-// PageRequest.of(page, size), which rejects a negative page index and a page
-// size smaller than one.
-func NewPageRequest(page, size int) (PageRequest, error) {
+// SortOrder is a single sort criterion, the equivalent of Spring Data's
+// Sort.Order. Property is the entity property name, which implementations
+// must map to a whitelisted column and never interpolate verbatim.
+type SortOrder struct {
+	Property   string
+	Descending bool
+}
+
+// String renders the order in Spring's "property: DIRECTION" style.
+func (o SortOrder) String() string {
+	dir := "ASC"
+	if o.Descending {
+		dir = "DESC"
+	}
+	return o.Property + ": " + dir
+}
+
+// PageRequest describes one page of a paginated query, replacing Spring
+// Data's Pageable. Page is zero-based, as in Spring Data.
+type PageRequest struct {
+	Page int
+	Size int
+	Sort []SortOrder
+}
+
+// NewPageRequest validates its arguments and builds a PageRequest. It
+// returns an error under the same conditions in which Spring's PageRequest.of
+// throws IllegalArgumentException: a negative page index, a size below one,
+// or a sort order with an empty property.
+func NewPageRequest(page, size int, sort ...SortOrder) (PageRequest, error) {
 	if page < 0 {
 		return PageRequest{}, fmt.Errorf("store: page index must not be less than zero, got %d", page)
 	}
 	if size < 1 {
 		return PageRequest{}, fmt.Errorf("store: page size must not be less than one, got %d", size)
 	}
-	return PageRequest{Page: page, Size: size}, nil
+	orders := make([]SortOrder, 0, len(sort))
+	for _, o := range sort {
+		if strings.TrimSpace(o.Property) == "" {
+			return PageRequest{}, fmt.Errorf("store: sort property must not be empty")
+		}
+		orders = append(orders, o)
+	}
+	return PageRequest{Page: page, Size: size, Sort: orders}, nil
 }
 
-// Offset returns the number of rows to skip for this page (page * size),
-// suitable for a SQL OFFSET clause.
-func (p PageRequest) Offset() int64 {
-	return int64(p.Page) * int64(p.Size)
+// Offset returns the number of rows to skip for this page, computed as
+// page * size.
+func (p PageRequest) Offset() int {
+	return p.Page * p.Size
 }
 
-// Page is one page of a larger result set. It replaces Spring Data's Page.
+// Page is one slice of a paginated result, replacing Spring Data's Page<T>.
 type Page[T any] struct {
-	// Content holds the elements of this page; never nil.
+	// Content holds the elements of this page. It is never nil.
 	Content []T
-	// Page is the zero-based index of this page.
-	Page int
-	// Size is the requested page size.
-	Size int
 	// TotalElements is the total number of elements across all pages.
 	TotalElements int64
+	// TotalPages is the total number of pages.
+	TotalPages int
+	// Number is the zero-based index of this page.
+	Number int
+	// Size is the requested page size.
+	Size int
 }
 
-// NewPage builds a Page for the given request. A nil content slice is
-// replaced by an empty one so it serialises as [] rather than null.
+// NewPage builds a Page from the content of one page, the request that
+// produced it and the total element count. TotalPages is derived the same
+// way as Spring's PageImpl.
 func NewPage[T any](content []T, req PageRequest, total int64) Page[T] {
 	if content == nil {
 		content = []T{}
 	}
-	return Page[T]{Content: content, Page: req.Page, Size: req.Size, TotalElements: total}
-}
-
-// TotalPages returns ceil(TotalElements / Size). As in Spring's PageImpl, a
-// page size of zero (unpaged) reports a single page.
-func (p Page[T]) TotalPages() int {
-	if p.Size <= 0 {
-		return 1
+	totalPages := 1
+	if req.Size > 0 {
+		totalPages = int((total + int64(req.Size) - 1) / int64(req.Size))
 	}
-	size := int64(p.Size)
-	return int((p.TotalElements + size - 1) / size)
+	return Page[T]{
+		Content:       content,
+		TotalElements: total,
+		TotalPages:    totalPages,
+		Number:        req.Page,
+		Size:          req.Size,
+	}
 }
 
-// PetTypeRepository is the persistence contract for model.PetType.
-//
-// Every method takes a context so implementations can honour cancellation and
-// participate in a transaction carried by the caller (the source relied on
-// the @Transactional service layer to supply the transaction boundary).
-// Errors from the underlying data source are returned rather than thrown; the
-// Spring DataAccessException hierarchy maps to wrapped Go errors.
+// OwnerRepository is the data-access contract for Owner entities.
+type OwnerRepository interface {
+	// FindByLastName returns all owners whose last name starts with the
+	// given prefix. The result is empty, not nil, when none match.
+	FindByLastName(ctx context.Context, lastName string) ([]*model.Owner, error)
+	// FindByID returns the owner with the given id, or ErrNotFound.
+	FindByID(ctx context.Context, id int) (*model.Owner, error)
+	// Save inserts the owner when it is new (nil id), otherwise updates it.
+	// On insert the generated id is set on the owner.
+	Save(ctx context.Context, owner *model.Owner) error
+	// FindAll returns every owner. The result is empty, not nil, when none
+	// exist.
+	FindAll(ctx context.Context) ([]*model.Owner, error)
+	// FindAllPage returns one page of owners.
+	FindAllPage(ctx context.Context, req PageRequest) (Page[*model.Owner], error)
+	// Delete removes the owner from the data store.
+	Delete(ctx context.Context, owner *model.Owner) error
+}
+
+// PetTypeRepository is the data-access contract for PetType entities.
 type PetTypeRepository interface {
-	// FindByID returns the pet type with the given primary key, or an error
-	// matching ErrNotFound if none exists.
+	// FindByID returns the pet type with the given id, or ErrNotFound.
 	FindByID(ctx context.Context, id int) (*model.PetType, error)
-
-	// FindByName returns the pet type with the given name, or an error
-	// matching ErrNotFound if none exists.
+	// FindByName returns the pet type with the given name, or ErrNotFound.
 	FindByName(ctx context.Context, name string) (*model.PetType, error)
-
-	// FindAll returns every stored pet type. An empty store yields an empty
-	// (non-nil) slice and a nil error.
+	// FindAll returns every pet type. The result is empty, not nil, when
+	// none exist.
 	FindAll(ctx context.Context) ([]*model.PetType, error)
-
-	// Save persists petType: it is inserted when it is new (IsNew, i.e. it
-	// has no id) and updated otherwise. On insert the generated id is written
-	// back onto petType (PostgreSQL INSERT ... RETURNING id), mirroring the
-	// source's mutate-the-argument semantics.
+	// Save inserts the pet type when it is new (nil id), otherwise updates
+	// it. On insert the generated id is set on the pet type.
 	Save(ctx context.Context, petType *model.PetType) error
-
-	// Delete removes petType from storage together with its dependent data:
-	// the visits of every pet of this type, then those pets, then the type
-	// itself. Implementations must perform these steps atomically.
+	// Delete removes the pet type from the data store.
 	Delete(ctx context.Context, petType *model.PetType) error
 }
 
-// OwnerRepository is the persistence contract for model.Owner. It replaces
-// the source's OwnerRepository interface; Java's overloaded findByLastName
-// and findAll become separate plain and *Page methods.
+// PetRepository is the data-access contract for Pet entities and for
+// reading the PetType lookup table. It is the Go port of the source's
+// org.springframework.samples.petclinic.repository.PetRepository.
 //
-// Errors from the data source are returned (wrapped) instead of thrown as
-// DataAccessException.
-type OwnerRepository interface {
-	// FindByLastName returns every owner whose last name starts with
-	// lastName (SQL: last_name LIKE $1 || '%'), with their pets loaded. No
-	// match yields an empty (non-nil) slice and a nil error.
-	FindByLastName(ctx context.Context, lastName string) ([]*model.Owner, error)
+// MIGRATION_NOTE: The overloaded Java methods findAll() and
+// findAll(Pageable) become FindAll and FindAllPage, because Go has no
+// overloading. Every method takes a context and returns an error instead of
+// throwing DataAccessException.
+type PetRepository interface {
+	// FindPetTypes returns all PetType records. The result is empty, not
+	// nil, when none exist.
+	FindPetTypes(ctx context.Context) ([]*model.PetType, error)
 
-	// FindByLastNamePage is the paginated form of FindByLastName: it returns
-	// the requested page of owners whose last name starts with lastName,
-	// together with the total number of matches.
-	FindByLastNamePage(ctx context.Context, lastName string, req PageRequest) (Page[*model.Owner], error)
+	// FindByID returns the pet with the given id. It returns an error
+	// wrapping ErrNotFound when no such pet exists, which replaces the
+	// source's DataRetrievalFailureException.
+	FindByID(ctx context.Context, id int) (*model.Pet, error)
 
-	// FindByID returns the owner with the given id, with its pets (and their
-	// visits) loaded, or an error matching ErrNotFound if none exists.
-	FindByID(ctx context.Context, id int) (*model.Owner, error)
+	// Save upserts the pet. When pet.IsNew() reports true (nil id), Save
+	// inserts the pet and sets the generated id on it using
+	// INSERT ... RETURNING id. Otherwise Save updates the existing row.
+	// A nil pet is an error.
+	Save(ctx context.Context, pet *model.Pet) error
 
-	// Save persists owner: it is inserted when it is new (IsNew, i.e. it has
-	// no id) and updated otherwise. On insert the generated id is written
-	// back onto owner (PostgreSQL INSERT ... RETURNING id).
-	Save(ctx context.Context, owner *model.Owner) error
+	// FindAll returns every pet in the data store. The result is empty,
+	// not nil, when none exist.
+	FindAll(ctx context.Context) ([]*model.Pet, error)
 
-	// FindAll returns every stored owner. An empty store yields an empty
-	// (non-nil) slice and a nil error.
-	FindAll(ctx context.Context) ([]*model.Owner, error)
+	// FindAllPage returns a single page of pets according to req's page
+	// number, size and optional sort.
+	FindAllPage(ctx context.Context, req PageRequest) (Page[*model.Pet], error)
 
-	// FindAllPage returns the requested page of all owners together with
-	// the total number of owners.
-	FindAllPage(ctx context.Context, req PageRequest) (Page[*model.Owner], error)
-
-	// Delete removes owner from storage together with its dependent data
-	// (the visits of its pets, then its pets), mirroring the source's
-	// cascade. Implementations must perform these steps atomically.
-	Delete(ctx context.Context, owner *model.Owner) error
+	// Delete removes the given pet from the data store, including the
+	// visits that belong to it, as the source's cascade does. A nil pet is
+	// an error.
+	Delete(ctx context.Context, pet *model.Pet) error
 }
