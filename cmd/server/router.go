@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -15,6 +17,7 @@ import (
 	"migrated-app/internal/config"
 	"migrated-app/internal/model"
 	"migrated-app/internal/service"
+	"migrated-app/internal/store"
 	"migrated-app/internal/store/sqlstore"
 )
 
@@ -31,6 +34,8 @@ type clinicAdapter struct {
 	specialties *sqlstore.SpecialtyRepository
 	visits      *sqlstore.VisitRepository
 	vets        *sqlstore.VetRepository
+	owners      *sqlstore.OwnerRepository
+	pets        *sqlstore.PetRepository
 }
 
 func (c *clinicAdapter) FindAllPetTypes(ctx context.Context) ([]*model.PetType, error) {
@@ -90,7 +95,118 @@ func (c *clinicAdapter) DeleteVet(ctx context.Context, v *model.Vet) error {
 }
 
 func (c *clinicAdapter) SaveVisit(ctx context.Context, v *model.Visit) error {
+	if v == nil {
+		return errors.New("save visit: nil visit")
+	}
+	if err := v.Validate(); err != nil {
+		return err
+	}
 	return c.visits.Save(ctx, v)
+}
+
+func (c *clinicAdapter) FindVisitByID(ctx context.Context, id int) (*model.Visit, error) {
+	return c.visits.FindByID(ctx, id)
+}
+
+func (c *clinicAdapter) FindAllVisits(ctx context.Context) ([]*model.Visit, error) {
+	return c.visits.FindAll(ctx)
+}
+
+func (c *clinicAdapter) FindVisitsByPetID(ctx context.Context, petID int) ([]*model.Visit, error) {
+	return c.visits.FindByPetID(ctx, petID)
+}
+
+func (c *clinicAdapter) DeleteVisit(ctx context.Context, v *model.Visit) error {
+	return c.visits.Delete(ctx, v)
+}
+
+// ---- pets ----
+
+func (c *clinicAdapter) FindAllPets(ctx context.Context) ([]*model.Pet, error) {
+	return c.pets.FindAll(ctx)
+}
+
+func (c *clinicAdapter) FindPets(ctx context.Context, page, size int) (store.Page[*model.Pet], error) {
+	req, err := store.NewPageRequest(page, size)
+	if err != nil {
+		return store.Page[*model.Pet]{}, err
+	}
+	return c.pets.FindAllPage(ctx, req)
+}
+
+func (c *clinicAdapter) DeletePet(ctx context.Context, p *model.Pet) error {
+	return c.pets.Delete(ctx, p)
+}
+
+func (c *clinicAdapter) FindPetByID(ctx context.Context, id int) (*model.Pet, error) {
+	return c.pets.FindByID(ctx, id)
+}
+
+func (c *clinicAdapter) FindPetTypes(ctx context.Context) ([]*model.PetType, error) {
+	return c.pets.FindPetTypes(ctx)
+}
+
+// SavePet mirrors service.ClinicService.SavePet: the pet type is resolved by
+// id and replaced with the stored type before the pet is saved.
+func (c *clinicAdapter) SavePet(ctx context.Context, p *model.Pet) error {
+	if p == nil {
+		return errors.New("save pet: nil pet")
+	}
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	if p.Type == nil || p.Type.GetID() == nil {
+		return fmt.Errorf("save pet: pet type missing: %w", store.ErrIntegrity)
+	}
+	typeID := *p.Type.GetID()
+	pt, err := c.petTypes.FindByID(ctx, typeID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("save pet: pet type %d not found: %w", typeID, store.ErrIntegrity)
+		}
+		return fmt.Errorf("save pet: resolve pet type %d: %w", typeID, err)
+	}
+	p.Type = pt
+	return c.pets.Save(ctx, p)
+}
+
+// ---- owners ----
+
+func (c *clinicAdapter) FindAllOwners(ctx context.Context) ([]*model.Owner, error) {
+	return c.owners.FindAll(ctx)
+}
+
+func (c *clinicAdapter) FindOwners(ctx context.Context, lastName *string, page, size int) (store.Page[*model.Owner], error) {
+	req, err := store.NewPageRequest(page, size)
+	if err != nil {
+		return store.Page[*model.Owner]{}, err
+	}
+	if lastName != nil {
+		return c.owners.FindByLastNamePage(ctx, *lastName, req)
+	}
+	return c.owners.FindAllPage(ctx, req)
+}
+
+func (c *clinicAdapter) FindOwnerByID(ctx context.Context, id int) (*model.Owner, error) {
+	return c.owners.FindByID(ctx, id)
+}
+
+func (c *clinicAdapter) FindOwnerByLastName(ctx context.Context, lastName string) ([]*model.Owner, error) {
+	return c.owners.FindByLastName(ctx, lastName)
+}
+
+func (c *clinicAdapter) SaveOwner(ctx context.Context, o *model.Owner) error {
+	if o == nil {
+		return errors.New("save owner: nil owner")
+	}
+	if err := o.Validate(); err != nil {
+		return err
+	}
+	return c.owners.Save(ctx, o)
+}
+
+func (c *clinicAdapter) DeleteOwner(ctx context.Context, o *model.Owner) error {
+	return c.owners.Delete(ctx, o)
 }
 
 // visitService adapts the sqlstore VisitRepository to api.VisitService.
@@ -154,7 +270,10 @@ func buildRouter() http.Handler {
 	}
 
 	visitRepo := sqlstore.NewVisitRepository(db)
+	ownerRepo := sqlstore.NewOwnerRepository(db)
 	clinic := &clinicAdapter{
+		owners:      ownerRepo,
+		pets:        sqlstore.NewPetRepository(db, ownerRepo),
 		petTypes:    sqlstore.NewPetTypeRepository(db),
 		specialties: sqlstore.NewSpecialtyRepository(db),
 		visits:      visitRepo,
