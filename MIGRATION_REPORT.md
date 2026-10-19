@@ -1,15 +1,15 @@
 ## Migration Report
 
-**Recommendation:** REVIEW RECOMMENDED (based on target unit tests only; behavior was not compared)
+**Recommendation:** MANUAL MIGRATION RECOMMENDED (based on behavioral comparison against the original application)
 **Build:** passed
-**Behavior vs original:** not verified — Could not start source and target server: source: 404 Client Error for http+docker://localhost/v1.56/containers/b1189114dc6184726b88c947e30ba8a7aea0e8c104db43cfeb24f2060591114e?v=False&link=False&for…
+**Behavior vs original:** 20/41 comparisons match (1 inconclusive)
 **Target unit tests:** 187/187 passing
 **Source test baseline:** 41/237 passing
 **Modules migrated:** 58/82
-**Model self-assessed confidence:** 90%
+**Model self-assessed confidence:** 75%
 
 ### Summary
-58 of 82 modules translated. 24 modules not translated, as the agreed plan decided. Why: Spring Data alternate implementation; replaced by the single database/sql implementation. Read only for semantics (13: `src/main/java/org/springframework/samples/petclinic/repository/springdatajpa/PetTypeRepositoryOverride.java`, `src/main/java/org/springframework/samples/petclinic/repository/springdatajpa/SpringDataPetTypeRepository.java` and 11 more); Alternate profile-selected implementation; Go gets one database/sql implementation. Read only for semantics (7: `src/main/java/org/springframework/samples/petclinic/repository/jpa/JpaOwnerRepositoryImpl.java`, `src/main/java/org/springframework/samples/petclinic/repository/jpa/JpaPetRepositoryImpl.java` and 5 more); Alternate profile-selected repository implementation. Go gets a single database/sql implementation. It is read only to settle default-profile semantics (2: `src/main/java/org/springframework/samples/petclinic/repository/springdatajpa/SpringDataVisitRepositoryImpl.java`, `src/main/java/org/springframework/samples/petclinic/repository/springdatajpa/VisitRepositoryOverride.java`); Inactive in the source: no @Component and never registered. An expvar decorator can be added later if metrics are wanted (1: `src/main/java/org/springframework/samples/petclinic/util/CallMonitoringAspect.java`); Dead code apart from a discarded addAllErrors call. Validation errors are produced via problem.go instead (1: `src/main/java/org/springframework/samples/petclinic/rest/controller/BindingErrorsResponse.java`). Build: passed. Target unit tests: 187/187 passing. Source test baseline: 41/237 passing. Behavior vs original: not verified (Could not start source and target server: source: 404 Client Error for http+docker://localhost/v1.56/containers/b118911…). 5 module(s) required human revision feedback (5 revision round(s) total). 37 modules are below confidence threshold and need review. Model self-assessed confidence: 90%.
+58 of 82 modules translated. 24 modules not translated, as the agreed plan decided. Why: Spring Data alternate implementation; replaced by the single database/sql implementation. Read only for semantics (13: `src/main/java/org/springframework/samples/petclinic/repository/springdatajpa/PetTypeRepositoryOverride.java`, `src/main/java/org/springframework/samples/petclinic/repository/springdatajpa/SpringDataPetTypeRepository.java` and 11 more); Alternate profile-selected implementation; Go gets one database/sql implementation. Read only for semantics (7: `src/main/java/org/springframework/samples/petclinic/repository/jpa/JpaOwnerRepositoryImpl.java`, `src/main/java/org/springframework/samples/petclinic/repository/jpa/JpaPetRepositoryImpl.java` and 5 more); Alternate profile-selected repository implementation. Go gets a single database/sql implementation. It is read only to settle default-profile semantics (2: `src/main/java/org/springframework/samples/petclinic/repository/springdatajpa/SpringDataVisitRepositoryImpl.java`, `src/main/java/org/springframework/samples/petclinic/repository/springdatajpa/VisitRepositoryOverride.java`); Inactive in the source: no @Component and never registered. An expvar decorator can be added later if metrics are wanted (1: `src/main/java/org/springframework/samples/petclinic/util/CallMonitoringAspect.java`); Dead code apart from a discarded addAllErrors call. Validation errors are produced via problem.go instead (1: `src/main/java/org/springframework/samples/petclinic/rest/controller/BindingErrorsResponse.java`). Build: passed. Target unit tests: 187/187 passing. Source test baseline: 41/237 passing. Behavior vs original: 20/41 comparisons match, 1 inconclusive. 5 module(s) required human revision feedback (5 revision round(s) total). 37 modules are below confidence threshold and need review. Model self-assessed confidence: 75%.
 
 ### Automated fixes applied
 - `internal/api/mapping.go` (+311/-0): revision for critical validator findings
@@ -18,6 +18,22 @@
 - `internal/api/mapping.go` (+113/-127): revision for critical validator findings
 - `go.mod` (+13/-146): compiler errors
 - `internal/store/sqlstore/entity_lookup.go` (+117/-0): target test failures
+- `internal/store/sqlstore/owner.go` (+336/-0): endpoint behaviour
+- `internal/store/sqlstore/pet.go` (+237/-264): endpoint behaviour
+- `internal/model/pet.go` (+164/-278): endpoint behaviour
+- `internal/model/pet.go` (+4/-1): compiler errors
+- `internal/store/sqlstore/owner.go` (+325/-187): endpoint fix reverted: more endpoints differed
+- `internal/store/sqlstore/pet.go` (+217/-264): endpoint fix reverted: more endpoints differed
+- `internal/model/pet.go` (+140/-257): endpoint fix reverted: more endpoints differed
+- `internal/model/owner.go` (+286/-0): endpoint behaviour
+- `internal/model/pet.go` (+145/-233): endpoint behaviour
+- `internal/store/sqlstore/pet.go` (+284/-190): endpoint behaviour
+- `internal/api/problem.go` (+247/-281): endpoint behaviour
+- `internal/store/sqlstore/pet.go` (+282/-251): compiler errors
+- `internal/model/owner.go` (+244/-272): endpoint fix reverted: more endpoints differed
+- `internal/model/pet.go` (+121/-210): endpoint fix reverted: more endpoints differed
+- `internal/store/sqlstore/pet.go` (+285/-168): endpoint fix reverted: more endpoints differed
+- `internal/api/problem.go` (+247/-279): endpoint fix reverted: more endpoints differed
 
 ### Agent notes (unverified)
 Contract tests re-run on request.
