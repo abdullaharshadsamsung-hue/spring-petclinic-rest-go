@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -80,7 +81,7 @@ func (c *fakeConn) QueryContext(_ context.Context, q string, nv []driver.NamedVa
 	if r.err != nil {
 		return nil, r.err
 	}
-	return &fakeRows{cols: r.cols, data: r.data}, nil
+	return &spFakeRows{cols: r.cols, data: r.data}, nil
 }
 
 func (c *fakeConn) ExecContext(_ context.Context, q string, nv []driver.NamedValue) (driver.Result, error) {
@@ -114,7 +115,7 @@ func (st *fakeStmt) Query(a []driver.Value) (driver.Rows, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
-	return &fakeRows{cols: r.cols, data: r.data}, nil
+	return &spFakeRows{cols: r.cols, data: r.data}, nil
 }
 
 type fakeTx struct{ s *fakeState }
@@ -128,14 +129,22 @@ func (t *fakeTx) Rollback() error {
 	return nil
 }
 
-type fakeRows struct {
+type spFakeRows struct {
 	cols []string
 	data [][]driver.Value
 	i    int
 }
 
-func (r *fakeRows) Columns() []string { return r.cols }
-func (r *fakeRows) Close() error      { return nil }
+func (r *spFakeRows) Columns() []string { return r.cols }
+func (r *spFakeRows) Close() error      { return nil }
+func (r *spFakeRows) Next(dest []driver.Value) error {
+	if r.i >= len(r.data) {
+		return io.EOF
+	}
+	copy(dest, r.data[r.i])
+	r.i++
+	return nil
+}
 
 func newFakeRepo(t *testing.T, h handlerFunc) (*SpecialtyRepository, *fakeState) {
 	t.Helper()
