@@ -47,6 +47,29 @@ type Pet struct {
 	visits []*Visit
 }
 
+// petJSON is the wire shape of a Pet, including its visits.
+type petJSON struct {
+	ID        *int     `json:"id"`
+	Name      string   `json:"name"`
+	BirthDate *Date    `json:"birthDate"`
+	Type      *PetType `json:"type"`
+	OwnerID   *int     `json:"ownerId"`
+	Visits    []*Visit `json:"visits"`
+}
+
+// MarshalJSON encodes the pet with its visits (newest first) and owner id,
+// as the source's eager-loaded PetDto did.
+func (p Pet) MarshalJSON() ([]byte, error) {
+	return json.Marshal(petJSON{
+		ID:        p.ID,
+		Name:      p.Name,
+		BirthDate: p.BirthDate,
+		Type:      p.Type,
+		OwnerID:   p.GetOwnerID(),
+		Visits:    p.GetVisits(),
+	})
+}
+
 // GetBirthDate returns the pet's birth date, or nil if none is set.
 func (p *Pet) GetBirthDate() *Date {
 	if p == nil {
