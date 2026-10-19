@@ -111,12 +111,15 @@ func (r *PetRepository) Save(ctx context.Context, pet *model.Pet) error {
 // without the owner's pets) attached. Visits are not loaded, matching the
 // source JDBC implementation.
 func (r *PetRepository) FindAll(ctx context.Context) ([]*model.Pet, error) {
-	pets, err := r.queryPets(ctx, "SELECT "+joinedPetColumns+" FROM pets")
+	pets, err := r.queryPets(ctx, "SELECT "+joinedPetColumns+" FROM pets ORDER BY pets.id")
 	if err != nil {
 		return nil, fmt.Errorf("find all pets: %w", err)
 	}
 	result, err := r.attachTypesAndOwners(ctx, pets)
 	if err != nil {
+		return nil, fmt.Errorf("find all pets: %w", err)
+	}
+	if err := r.attachVisits(ctx, result); err != nil {
 		return nil, fmt.Errorf("find all pets: %w", err)
 	}
 	return result, nil
@@ -133,6 +136,9 @@ func (r *PetRepository) FindAllPage(ctx context.Context, req store.PageRequest) 
 	}
 	result, err := r.attachTypesAndOwners(ctx, pets)
 	if err != nil {
+		return store.Page[*model.Pet]{}, fmt.Errorf("find pets page: %w", err)
+	}
+	if err := r.attachVisits(ctx, result); err != nil {
 		return store.Page[*model.Pet]{}, fmt.Errorf("find pets page: %w", err)
 	}
 	var total int64
@@ -176,6 +182,55 @@ func (r *PetRepository) Delete(ctx context.Context, pet *model.Pet) (err error) 
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("delete pet %d: commit: %w", petID, err)
+	}
+	return nil
+}
+
+// attachVisits loads the visits of the given pets (eager fetch in the
+// source) and adds them to each pet.
+func (r *PetRepository) attachVisits(ctx context.Context, pets []*model.Pet) error {
+	byID := make(map[int]*model.Pet, len(pets))
+	args := make([]any, 0, len(pets))
+	placeholders := make([]string, 0, len(pets))
+	for _, p := range pets {
+		if p == nil || p.GetID() == nil {
+			continue
+		}
+		if _, dup := byID[*p.GetID()]; dup {
+			continue
+		}
+		byID[*p.GetID()] = p
+		args = append(args, *p.GetID())
+		placeholders = append(placeholders, "$"+strconv.Itoa(len(args)))
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT visits.pet_id, "+visitColumns+" FROM visits WHERE visits.pet_id IN ("+
+			strings.Join(placeholders, ", ")+") ORDER BY visits.id", args...)
+	if err != nil {
+		return fmt.Errorf("query visits: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			petID sql.NullInt64
+			vr    visitRow
+		)
+		dest := append([]any{&petID}, vr.dest()...)
+		if err := rows.Scan(dest...); err != nil {
+			return fmt.Errorf("scan visit row: %w", err)
+		}
+		if !petID.Valid {
+			continue
+		}
+		if p, ok := byID[int(petID.Int64)]; ok {
+			p.AddVisit(vr.toVisit())
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate visits: %w", err)
 	}
 	return nil
 }
