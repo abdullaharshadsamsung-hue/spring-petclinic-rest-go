@@ -15,9 +15,10 @@ import (
 const rolePrefix = "ROLE_"
 
 // ErrUserHasNoRoles is returned by UserService.SaveUser when the user has no
-// roles. It replaces the source's IllegalArgumentException("User must have at
-// least a role set!"), and the API layer maps it to HTTP 400.
-var ErrUserHasNoRoles = errors.New("user must have at least a role set")
+// roles. It replaces the source's IllegalArgumentException and keeps its exact
+// message so error bodies stay identical. The API layer should map it with
+// errors.Is (the source surfaced it as HTTP 500, title IllegalArgumentException).
+var ErrUserHasNoRoles = errors.New("User must have at least a role set!")
 
 // ErrNilUser is returned by UserService.SaveUser when it is given a nil user.
 var ErrNilUser = errors.New("user must not be nil")
@@ -38,8 +39,11 @@ type UserService interface {
 //
 // MIGRATION_NOTE: @Transactional is delegated to store.UserRepository.Save.
 // Its contract requires the user and all of its roles to be written
-// atomically. The service makes only one data-layer call, so it needs no
-// transaction of its own.
+// atomically (upsert user, replace roles, one tx). The service makes only one
+// data-layer call, so it needs no transaction of its own.
+//
+// MIGRATION_NOTE: like the source, the password is persisted exactly as given
+// (no hashing). Review before production use.
 type userService struct {
 	users store.UserRepository
 }
@@ -52,7 +56,8 @@ func NewUserService(repo store.UserRepository) UserService {
 	return &userService{users: repo}
 }
 
-// SaveUser implements UserService.
+// SaveUser implements UserService. Like the source, it mutates the caller's
+// user in place (role names and role back-references).
 func (s *userService) SaveUser(ctx context.Context, user *model.User) error {
 	if user == nil {
 		return ErrNilUser
